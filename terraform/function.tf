@@ -66,6 +66,6 @@ resource "yandex_function" "plankabot" {
 
   log_options {
     log_group_id = yandex_logging_group.plankabot.id
-    min_level    = "INFO"
+    min_level    = "UNSPECIFIED"
   }
 }

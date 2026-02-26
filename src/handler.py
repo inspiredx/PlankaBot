@@ -21,7 +21,6 @@ def handler(event, context):
       }
     """
 
-    print("test")
     try:
         body_raw = event.get("body", "{}")
         if isinstance(body_raw, str):
