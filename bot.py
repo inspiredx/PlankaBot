@@ -1,13 +1,18 @@
 import vk_api
-from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 from vk_api.utils import get_random_id
 from datetime import date
+from flask import Flask, request, abort
 
-from config import VK_GROUP_TOKEN, VK_GROUP_ID
+from config import VK_GROUP_TOKEN, VK_CONFIRMATION_TOKEN, CALLBACK_PORT
 from db import init_db, mark_plank, get_stats_for_today
 
+app = Flask(__name__)
 
-def send_message(vk, peer_id, text):
+vk_session = vk_api.VkApi(token=VK_GROUP_TOKEN)
+vk = vk_session.get_api()
+
+
+def send_message(peer_id, text):
     vk.messages.send(
         peer_id=peer_id,
         random_id=get_random_id(),
@@ -15,16 +20,16 @@ def send_message(vk, peer_id, text):
     )
 
 
-def get_user_name(vk, user_id: int) -> str:
+def get_user_name(user_id: int) -> str:
     info = vk.users.get(user_ids=user_id)[0]
     return f"{info['first_name']} {info['last_name']}"
 
 
-def handle_planka(vk, event, text: str):
-    user_id = event.obj.message["from_id"]
-    peer_id = event.obj.message["peer_id"]
+def handle_planka(msg, text: str):
+    user_id = msg["from_id"]
+    peer_id = msg["peer_id"]
 
-    name = get_user_name(vk, user_id)
+    name = get_user_name(user_id)
 
     plank_value = None
 
@@ -37,18 +42,18 @@ def handle_planka(vk, event, text: str):
 
     if first_today:
         if plank_value is not None:
-            send_message(vk, peer_id, f"{today_str} планка сделана ({plank_value})")
+            send_message(peer_id, f"{today_str} планка сделана ({plank_value})")
         else:
-            send_message(vk, peer_id, f"{today_str} планка сделана")
+            send_message(peer_id, f"{today_str} планка сделана")
     else:
         if plank_value is not None:
-            send_message(vk, peer_id, f"планка уже сделана ({plank_value})")
+            send_message(peer_id, f"планка уже сделана ({plank_value})")
         else:
-            send_message(vk, peer_id, "планка уже сделана")
+            send_message(peer_id, "планка уже сделана")
 
 
-def handle_stats(vk, event):
-    peer_id = event.obj.message["peer_id"]
+def handle_stats(msg):
+    peer_id = msg["peer_id"]
     done, not_done = get_stats_for_today()
 
     today_str = date.today().isoformat()
@@ -68,11 +73,11 @@ def handle_stats(vk, event):
         text_parts.append("")
         text_parts.append("Все отметились или ещё никто не добавлен в базу")
 
-    send_message(vk, peer_id, "\n".join(text_parts))
+    send_message(peer_id, "\n".join(text_parts))
 
 
-def handle_guide(vk, event):
-    peer_id = event.obj.message["peer_id"]
+def handle_guide(msg):
+    peer_id = msg["peer_id"]
     text = (
         "Гайд по командам:\n"
         "• планка — отметить, что ты сделал(а) планку сегодня.\n"
@@ -81,53 +86,57 @@ def handle_guide(vk, event):
         "• гайд — показать это сообщение.\n"
         "• ебать гусей — специальная команда.\n"
     )
-    send_message(vk, peer_id, text)
+    send_message(peer_id, text)
 
 
-def handle_geese(vk, event):
-    peer_id = event.obj.message["peer_id"]
-    send_message(vk, peer_id, "Вы ебете гусей")
+def handle_geese(msg):
+    peer_id = msg["peer_id"]
+    send_message(peer_id, "Вы ебете гусей")
 
 
-def main():
-    init_db()
+def process_message(msg):
+    text_raw = (msg.get("text") or "").strip()
+    text = text_raw.lower()
 
-    vk_session = vk_api.VkApi(token=VK_GROUP_TOKEN)
-    vk = vk_session.get_api()
-    longpoll = VkBotLongPoll(vk_session, VK_GROUP_ID)
+    if msg.get("peer_id", 0) < 2000000000:
+        return
 
-    print("Бот запущен")
+    parts = text.split()
 
-    for event in longpoll.listen():
-        if event.type != VkBotEventType.MESSAGE_NEW:
-            continue
+    if parts and parts[0] == "планка":
+        if len(parts) <= 2:
+            handle_planka(msg, text_raw)
 
-        msg = event.obj.message
-        text_raw = (msg.get("text") or "").strip()
-        text = text_raw.lower()
+    elif text == "стата":
+        handle_stats(msg)
 
-        if msg.get("peer_id", 0) < 2000000000:
-            continue
+    elif text == "гайд":
+        handle_guide(msg)
 
-        parts = text.split()
+    elif text == "ебать гусей":
+        handle_geese(msg)
 
-        if parts and parts[0] == "планка":
-            if len(parts) == 1:
-                handle_planka(vk, event, text_raw)
-            elif len(parts) == 2:
-                handle_planka(vk, event, text_raw)
-            else:
-                continue
 
-        elif text == "стата":
-            handle_stats(vk, event)
+@app.route("/", methods=["POST"])
+def callback():
+    data = request.get_json(silent=True)
+    if data is None:
+        abort(400)
 
-        elif text == "гайд":
-            handle_guide(vk, event)
+    event_type = data.get("type")
 
-        elif text == "ебать гусей":
-            handle_geese(vk, event)
+    if event_type == "confirmation":
+        return VK_CONFIRMATION_TOKEN, 200
+
+    if event_type == "message_new":
+        msg = data.get("object", {}).get("message", {})
+        print(data)
+        process_message(msg)
+
+    return "ok", 200
 
 
 if __name__ == "__main__":
-    main()
+    init_db()
+    print("Бот запущен (callback)")
+    app.run(host="0.0.0.0", port=CALLBACK_PORT)
