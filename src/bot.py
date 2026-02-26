@@ -9,6 +9,7 @@ vk = vk_session.get_api()
 
 
 def send_message(peer_id, text):
+    print("Responding", "peer_id", "text")
     vk.messages.send(
         peer_id=peer_id,
         random_id=get_random_id(),
