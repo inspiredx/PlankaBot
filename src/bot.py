@@ -9,13 +9,14 @@ logging.getLogger().setLevel(logging.DEBUG)
 logging.getLogger(__name__).setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-vk_session = vk_api.VkApi(token=VK_GROUP_TOKEN)
-vk = vk_session.get_api()
+def _get_vk():
+    vk_session = vk_api.VkApi(token=VK_GROUP_TOKEN)
+    return vk_session.get_api()
 
 
 def send_message(peer_id, text):
     logger.warning("Sending message to peer_id=%s: %s", peer_id, text)
-    vk.messages.send(
+    _get_vk().messages.send(
         peer_id=peer_id,
         random_id=get_random_id(),
         message=text
@@ -23,7 +24,7 @@ def send_message(peer_id, text):
 
 
 def get_user_name(user_id: int) -> str:
-    info = vk.users.get(user_ids=user_id)[0]
+    info = _get_vk().users.get(user_ids=user_id)[0]
     return f"{info['first_name']} {info['last_name']}"
 
 
