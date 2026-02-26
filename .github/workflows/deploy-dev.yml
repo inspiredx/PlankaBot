@@ -17,6 +17,10 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +31,7 @@ jobs:
 
       - name: Run tests
         run: |
-          pip install -r requirements-dev.txt
+          pip install -r requirements.txt -r requirements-dev.txt
           pytest tests/ -v --junit-xml=test-results.xml
 
       - name: Publish test results
