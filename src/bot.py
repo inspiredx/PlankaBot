@@ -5,7 +5,8 @@ from datetime import date
 
 from config import VK_GROUP_TOKEN
 
-logging.basicConfig(level=logging.WARNING)
+logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger(__name__).setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 vk_session = vk_api.VkApi(token=VK_GROUP_TOKEN)

@@ -4,9 +4,9 @@ import logging
 from config import VK_CONFIRMATION_TOKEN
 from bot import process_message
 
-logging.basicConfig(level=logging.WARNING)
+logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger(__name__).setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 def handler(event, context):
     """
