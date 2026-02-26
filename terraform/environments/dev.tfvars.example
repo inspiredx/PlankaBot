@@ -1,0 +1,15 @@
+# Dev environment — fill in your actual values
+cloud_id   = "REPLACE_WITH_CLOUD_ID"
+folder_id  = "REPLACE_WITH_DEV_FOLDER_ID"
+environment = "dev"
+
+# Path to the deployer SA authorized key JSON (local deployments only)
+# For GitHub Actions this is injected as an env var instead
+sa_key_file = "~/.yc/deployer-key-dev.json"
+
+# Terraform state bucket (must be created beforehand)
+tfstate_bucket = "plankabot-tfstate-dev"
+
+# VK secrets — fill in or override via TF_VAR_* env vars
+vk_group_token        = "REPLACE_WITH_VK_GROUP_TOKEN"
+vk_confirmation_token = "REPLACE_WITH_VK_CONFIRMATION_TOKEN"
