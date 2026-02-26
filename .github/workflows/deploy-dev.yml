@@ -65,10 +65,8 @@ jobs:
 
       - name: Terraform Apply
         working-directory: terraform
-        env:
-          TF_VAR_sa_key_file: ~/.yc/deployer-key-dev.json
         run: |
-          terraform apply -auto-approve
+          terraform apply -auto-approve -var="sa_key_file=$HOME/.yc/deployer-key-dev.json"
 
       - name: Print API Gateway URL
         working-directory: terraform
