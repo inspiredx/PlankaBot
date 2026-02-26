@@ -20,6 +20,8 @@ def handler(event, context):
         ...
       }
     """
+
+    logger.warning("test")
     try:
         body_raw = event.get("body", "{}")
         if isinstance(body_raw, str):
@@ -31,7 +33,7 @@ def handler(event, context):
         return {"statusCode": 400, "body": "bad request"}
 
     event_type = data.get("type")
-    logger.info("Received VK event type: %s", event_type)
+    logger.warning("Received VK event type: %s", event_type)
 
     if event_type == "confirmation":
         return {"statusCode": 200, "body": VK_CONFIRMATION_TOKEN}
