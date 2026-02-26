@@ -10,7 +10,6 @@ logging.getLogger(__name__).setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 def _get_vk():
-    logger.info(VK_GROUP_TOKEN)
     vk_session = vk_api.VkApi(token=VK_GROUP_TOKEN)
     return vk_session.get_api()
 
