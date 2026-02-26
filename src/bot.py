@@ -63,6 +63,7 @@ def handle_geese(msg):
 
 
 def process_message(msg):
+    print("incoming", msg)
     text_raw = (msg.get("text") or "").strip()
     text = text_raw.lower()
 
