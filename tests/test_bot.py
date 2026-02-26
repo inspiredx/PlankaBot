@@ -93,11 +93,33 @@ class TestHandleGuide:
 
 
 class TestHandleGeese:
-    def test_sends_geese_response(self, bot_module):
+    def test_jokes_list_has_10_entries(self, bot_module):
+        assert len(bot_module.GOOSEFUCK_JOKES) == 10
+
+    def test_all_jokes_are_non_empty_strings(self, bot_module):
+        for joke in bot_module.GOOSEFUCK_JOKES:
+            assert isinstance(joke, str) and len(joke) > 0
+
+    def test_all_jokes_end_with_signature(self, bot_module):
+        for joke in bot_module.GOOSEFUCK_JOKES:
+            assert joke.endswith("Вы ебете гусей"), f"Joke does not end with 'Вы ебете гусей': {joke!r}"
+
+    def test_sends_one_of_the_jokes(self, bot_module):
         msg = make_msg("ебать гусей")
         with patch.object(bot_module, "send_message") as mock_send:
             bot_module.handle_geese(msg)
-        mock_send.assert_called_once_with(msg["peer_id"], "Вы ебете гусей из яндекс облака с рабочим пайплайном тест/деплой")
+        mock_send.assert_called_once()
+        peer_id, text = mock_send.call_args[0]
+        assert peer_id == msg["peer_id"]
+        assert text in bot_module.GOOSEFUCK_JOKES
+
+    def test_random_choice_is_used(self, bot_module):
+        """Verify random.choice is called with the full jokes list."""
+        msg = make_msg("ебать гусей")
+        with patch("bot.random.choice", return_value=bot_module.GOOSEFUCK_JOKES[0]) as mock_choice, \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_geese(msg)
+        mock_choice.assert_called_once_with(bot_module.GOOSEFUCK_JOKES)
 
 
 class TestHandleStats:
