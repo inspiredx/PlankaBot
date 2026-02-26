@@ -66,7 +66,7 @@ def handle_guide(msg):
 
 def handle_geese(msg):
     peer_id = msg["peer_id"]
-    send_message(peer_id, "Вы ебете гусей")
+    send_message(peer_id, "Вы ебете гусей из яндекс облака с рабочим пайплайном тест/деплой")
 
 
 def process_message(msg):

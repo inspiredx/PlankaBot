@@ -97,7 +97,7 @@ class TestHandleGeese:
         msg = make_msg("ебать гусей")
         with patch.object(bot_module, "send_message") as mock_send:
             bot_module.handle_geese(msg)
-        mock_send.assert_called_once_with(msg["peer_id"], "Вы ебете гусей")
+        mock_send.assert_called_once_with(msg["peer_id"], "Вы ебете гусей из яндекс облака с рабочим пайплайном тест/деплой")
 
 
 class TestHandleStats:
