@@ -1,15 +1,19 @@
+import logging
 import vk_api
 from vk_api.utils import get_random_id
 from datetime import date
 
 from config import VK_GROUP_TOKEN
 
+logging.basicConfig(level=logging.WARNING)
+logger = logging.getLogger(__name__)
+
 vk_session = vk_api.VkApi(token=VK_GROUP_TOKEN)
 vk = vk_session.get_api()
 
 
 def send_message(peer_id, text):
-    print("Responding", "peer_id", "text")
+    logger.warning("Sending message to peer_id=%s: %s", peer_id, text)
     vk.messages.send(
         peer_id=peer_id,
         random_id=get_random_id(),
@@ -63,12 +67,14 @@ def handle_geese(msg):
 
 
 def process_message(msg):
-    print("incoming", msg)
     text_raw = (msg.get("text") or "").strip()
     text = text_raw.lower()
 
     if msg.get("peer_id", 0) < 2000000000:
+        logger.warning("Ignoring private message from peer_id=%s", msg.get("peer_id"))
         return
+
+    logger.warning("Processing message from peer_id=%s: %s", msg.get("peer_id"), text_raw)
 
     parts = text.split()
 
