@@ -5,7 +5,7 @@ from config import VK_CONFIRMATION_TOKEN
 from bot import process_message
 
 logging.getLogger().setLevel(logging.DEBUG)
-logging.getLogger(__name__).setLevel(logging.INFO)
+logging.getLogger(__name__).setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 def handler(event, context):
@@ -21,7 +21,7 @@ def handler(event, context):
       }
     """
 
-    logger.warning("test")
+    print("test")
     try:
         body_raw = event.get("body", "{}")
         if isinstance(body_raw, str):
