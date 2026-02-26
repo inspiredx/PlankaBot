@@ -1,0 +1,4 @@
+import os
+
+VK_GROUP_TOKEN = os.getenv("VK_GROUP_TOKEN")
+VK_CONFIRMATION_TOKEN = os.getenv("VK_CONFIRMATION_TOKEN")

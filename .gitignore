@@ -209,3 +209,22 @@ __marimo__/
 
 .idea
 planka.db
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfplan
+# tfvars contain secrets — copy from *.tfvars.example and fill in locally
+terraform/environments/*.tfvars
+!terraform/environments/*.tfvars.example
+
+# Function build artifact
+dist/
+
+# SA key files — never commit these
+*.json
+!package.json
+~/.yc/
+</content>
