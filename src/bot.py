@@ -1,14 +1,46 @@
 import logging
+import os
 import random
 import vk_api
 from vk_api.utils import get_random_id
 from datetime import date
 
-from config import VK_GROUP_TOKEN
+import openai
+
+from config import VK_GROUP_TOKEN, YANDEX_FOLDER_ID, YANDEX_LLM_API_KEY
 
 logging.getLogger().setLevel(logging.DEBUG)
 logging.getLogger(__name__).setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Load the geese story system prompt once at module import time.
+# In the deployed function the file lives at prompts/geese_story_prompt.txt
+# relative to the working directory; fall back to the repo path for tests.
+# ---------------------------------------------------------------------------
+_PROMPT_PATHS = [
+    os.path.join(os.path.dirname(__file__), "prompts", "geese_story_prompt.txt"),
+    os.path.join(os.path.dirname(__file__), "..", "src", "prompts", "geese_story_prompt.txt"),
+]
+GEESE_STORY_PROMPT = ""
+for _p in _PROMPT_PATHS:
+    if os.path.exists(_p):
+        with open(_p, encoding="utf-8") as _f:
+            GEESE_STORY_PROMPT = _f.read().strip()
+        break
+
+GEESE_PLACEHOLDER_MESSAGES = [
+    "Ну хорошо хорошо, сейчас подумаем, что можно сделать…",
+    "Гуси уже в курсе. Собираем мудрость…",
+    "Один момент, консультируюсь со стаей…",
+    "Ладно, дай собраться с мыслями. Гуси думают.",
+    "Принято. Открываю книгу гусиной мудрости…",
+    "Хм, интересный запрос. Гуси совещаются…",
+    "Сейчас, сейчас. Главный гусь берёт слово…",
+    "Ок, запрос принят. Жди гусиного откровения.",
+    "Стая собирается. Это займёт секунду…",
+    "Молчу, думаю, пишу. Гуси не торопятся.",
+]
 
 def _get_vk():
     vk_session = vk_api.VkApi(token=VK_GROUP_TOKEN)
@@ -59,28 +91,61 @@ def handle_guide(msg):
         "• планка X — отметить планку с указанием числа X (выводится в скобках, без единиц измерения).\n"
         "• стата — показать, кто сегодня сделал планку и кто нет.\n"
         "• гайд — показать это сообщение.\n"
-        "• ебать гусей — специальная команда.\n"
+        "• ебать гусей [контекст] — мудрая история про гусей и планку.\n"
     )
     send_message(peer_id, text)
 
 
-GOOSEFUCK_JOKES = [
-    "Гусь подходит к программисту и говорит: «Га-га-га». Программист отвечает: «Сам иди в облако». Вы ебете гусей",
-    "— Почему гуси не пишут юнит-тесты? — Потому что им и так всё га-га-рантировано. Вы ебете гусей",
-    "Девопс поднял гуся в прод. Гусь упал. Девопс сказал: «Работало же на локалке». Вы ебете гусей",
-    "— Сколько гусей нужно, чтобы вкрутить лампочку? — Один, но пайплайн сломается. Вы ебете гусей",
-    "Гусь посмотрел в Kubernetes и сказал: «Я думал, только у нас в стае так сложно». Вы ебете гусей",
-    "— Как называется гусь в яндекс облаке? — Serverless waterfowl. Вы ебете гусей",
-    "Гусь прочитал README и всё равно ничего не понял. Как джун. Вы ебете гусей",
-    "— Чем отличается гусь от хорошего кода? — Гусь хотя бы иногда молчит. Вы ебете гусей",
-    "Менеджер попросил гуся сделать оценку задачи. Гусь ответил: «2 га-га недели». Вы ебете гусей",
-    "Гусь задеплоился в пятницу вечером. В понедельник его уже не было. Вы ебете гусей",
-]
+def _call_llm(extra_context: str) -> str:
+    """Call Yandex AI Studio (OpenAI-compatible) and return the generated story."""
+    client = openai.OpenAI(
+        api_key=YANDEX_LLM_API_KEY,
+        base_url="https://ai.api.cloud.yandex.net/v1",
+        project=YANDEX_FOLDER_ID,
+    )
+    response = client.responses.create(
+        model=f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite/latest",
+        temperature=0.8,
+        instructions=GEESE_STORY_PROMPT,
+        input=extra_context if extra_context else "просто история",
+        max_output_tokens=500,
+    )
+    return response.output_text
 
 
-def handle_geese(msg):
+def handle_geese(msg, text_raw: str):
+    """
+    Handle the "ебать гусей [extra context]" command.
+
+    1. Immediately dispatch a random placeholder message.
+    2. Parse extra context (everything after "ебать гусей").
+    3. Call the LLM and send the resulting story.
+    """
     peer_id = msg["peer_id"]
-    send_message(peer_id, random.choice(GOOSEFUCK_JOKES))
+
+    # Step 1 — send placeholder immediately
+    send_message(peer_id, random.choice(GEESE_PLACEHOLDER_MESSAGES))
+
+    # Step 2 — extract extra context
+    trigger = "ебать гусей"
+    lower_raw = text_raw.lower()
+    idx = lower_raw.find(trigger)
+    if idx != -1:
+        extra_context = text_raw[idx + len(trigger):].strip()
+    else:
+        extra_context = ""
+
+    logger.warning("handle_geese: extra_context=%r", extra_context)
+
+    # Step 3 — call LLM and send story
+    try:
+        story = _call_llm(extra_context)
+    except Exception as e:
+        logger.error("LLM call failed: %s", e)
+        send_message(peer_id, "Гуси молчат. Что-то пошло не так на их стороне.")
+        return
+
+    send_message(peer_id, story + "\n\nВы ебете гусей.")
 
 
 def process_message(msg):
@@ -105,5 +170,5 @@ def process_message(msg):
     elif text == "гайд":
         handle_guide(msg)
 
-    elif text == "ебать гусей":
-        handle_geese(msg)
+    elif text.startswith("ебать гусей"):
+        handle_geese(msg, text_raw)

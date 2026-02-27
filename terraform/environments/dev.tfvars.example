@@ -13,3 +13,7 @@ tfstate_bucket = "plankabot-tfstate-dev"
 # VK secrets — fill in or override via TF_VAR_* env vars
 vk_group_token        = "REPLACE_WITH_VK_GROUP_TOKEN"
 vk_confirmation_token = "REPLACE_WITH_VK_CONFIRMATION_TOKEN"
+
+# Yandex AI Studio API key for the plankabot-llm-dev service account.
+# Created manually in YC Console after first terraform apply — see README "Post-deploy checklist".
+yandex_llm_api_key = "REPLACE_WITH_LLM_API_KEY"

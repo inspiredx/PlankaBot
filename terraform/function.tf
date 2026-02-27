@@ -25,6 +25,10 @@ data "archive_file" "function_zip" {
     content  = file("${local.repo_root}/requirements.txt")
     filename = "requirements.txt"
   }
+  source {
+    content  = file("${local.repo_root}/src/prompts/geese_story_prompt.txt")
+    filename = "prompts/geese_story_prompt.txt"
+  }
 }
 
 resource "yandex_logging_group" "plankabot" {
@@ -62,6 +66,8 @@ resource "yandex_function" "plankabot" {
   environment = {
     VK_GROUP_TOKEN        = var.vk_group_token
     VK_CONFIRMATION_TOKEN = var.vk_confirmation_token
+    YANDEX_FOLDER_ID      = var.folder_id
+    YANDEX_LLM_API_KEY    = var.yandex_llm_api_key
   }
 
   log_options {
