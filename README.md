@@ -12,9 +12,10 @@ Deployed as a **Yandex Cloud Function** with an **API Gateway** serving as the V
 3. [Bootstrap: One-time Yandex Cloud Setup](#bootstrap-one-time-yandex-cloud-setup)
 4. [Local Deployment](#local-deployment)
 5. [GitHub Actions Deployment](#github-actions-deployment)
-6. [Environment Variables Reference](#environment-variables-reference)
-7. [Running Tests](#running-tests)
-8. [Configuring VK Callback URL](#configuring-vk-callback-url)
+6. [Post-deploy Checklist: LLM API Key Setup](#post-deploy-checklist-llm-api-key-setup)
+7. [Environment Variables Reference](#environment-variables-reference)
+8. [Running Tests](#running-tests)
+9. [Configuring VK Callback URL](#configuring-vk-callback-url)
 
 ---
 
@@ -186,15 +187,42 @@ A single workflow (`deploy-dev.yml`) handles deployment. It triggers on:
 
 Add these in **Settings → Secrets and variables → Actions**:
 
-| Secret name                 | Description                                            |
-|-----------------------------|--------------------------------------------------------|
-| `YC_CLOUD_ID`               | Yandex Cloud cloud ID                                  |
-| `YC_FOLDER_ID_DEV`          | Dev folder ID                                          |
-| `YC_SA_KEY_JSON_DEV`        | Full JSON content of deployer SA authorized key (dev)  |
-| `YC_S3_ACCESS_KEY_DEV`      | Static access key ID for S3 backend (dev)              |
-| `YC_S3_SECRET_KEY_DEV`      | Static secret key for S3 backend (dev)                 |
-| `VK_GROUP_TOKEN_DEV`        | VK group API token                                     |
-| `VK_CONFIRMATION_TOKEN_DEV` | VK callback confirmation token                         |
+| Secret name                 | Description                                                                    |
+|-----------------------------|--------------------------------------------------------------------------------|
+| `YC_CLOUD_ID`               | Yandex Cloud cloud ID                                                          |
+| `YC_FOLDER_ID_DEV`          | Dev folder ID                                                                  |
+| `YC_SA_KEY_JSON_DEV`        | Full JSON content of deployer SA authorized key (dev)                          |
+| `YC_S3_ACCESS_KEY_DEV`      | Static access key ID for S3 backend (dev)                                      |
+| `YC_S3_SECRET_KEY_DEV`      | Static secret key for S3 backend (dev)                                         |
+| `VK_GROUP_TOKEN_DEV`        | VK group API token                                                             |
+| `VK_CONFIRMATION_TOKEN_DEV` | VK callback confirmation token                                                 |
+| `YANDEX_LLM_API_KEY_DEV`    | API key for `plankabot-llm-dev` SA (created manually — see post-deploy steps)  |
+
+> **Prod note:** when a prod workflow is added, mirror the above with `_PROD` suffixes and `YANDEX_LLM_API_KEY_PROD`.
+
+---
+
+## Post-deploy Checklist: LLM API Key Setup
+
+> ⚠️ **Do this after every first `terraform apply` in a new environment** (or whenever the SA is recreated).
+> The `plankabot-llm-<env>` service account is created by Terraform, but its API key must be created manually.
+
+### Dev
+
+1. In the [YC Console](https://console.yandex.cloud/), navigate to the dev folder.
+2. Go to **Identity and Access Management → Service accounts**.
+3. Find `plankabot-llm-dev` and click on it.
+4. Click **Create new key → Create API key**.
+5. Description: `plankabot-dev LLM key`.
+6. Scope: select **`yc.ai.languageModels.execute`**.
+7. Click **Create**. Copy the **secret key** (shown only once).
+8. In the GitHub repo, go to **Settings → Secrets and variables → Actions**.
+9. Create or update secret `YANDEX_LLM_API_KEY_DEV` with the copied value.
+10. Re-run the GitHub Actions deployment so the function picks up the new key.
+
+### Prod *(when prod workflow is set up)*
+
+Repeat the same steps for `plankabot-llm-prod` and secret `YANDEX_LLM_API_KEY_PROD`.
 
 ---
 
@@ -206,6 +234,8 @@ These environment variables are set on the deployed Yandex Cloud Function:
 |------------------------|--------------------------------------------------|----------|
 | `VK_GROUP_TOKEN`       | VK group API token (for sending messages)        | Yes      |
 | `VK_CONFIRMATION_TOKEN`| VK confirmation string for callback verification | Yes      |
+| `YANDEX_FOLDER_ID`     | Yandex Cloud folder ID (injected from `folder_id` tfvar) | Yes |
+| `YANDEX_LLM_API_KEY`   | API key for the LLM service account             | Yes      |
 
 For local Terraform runs, secrets can also be passed as `TF_VAR_*` variables
 to avoid writing them to `.tfvars` files:
@@ -250,7 +280,9 @@ PlankaBot/
 ├── src/
 │   ├── handler.py          # Yandex Cloud Function entry point
 │   ├── bot.py              # VK bot logic (message routing, responses)
-│   └── config.py           # Configuration from environment variables
+│   ├── config.py           # Configuration from environment variables
+│   └── prompts/
+│       └── geese_story_prompt.txt  # System prompt for the LLM geese story
 ├── tests/
 │   ├── test_handler.py     # Handler unit tests
 │   └── test_bot.py         # Bot logic unit tests
@@ -258,6 +290,7 @@ PlankaBot/
 │   ├── main.tf             # Provider + S3 backend config
 │   ├── variables.tf        # Input variables
 │   ├── function.tf         # Yandex Cloud Function resource
+│   ├── iam.tf              # LLM service account + IAM role binding
 │   ├── api_gateway.tf      # Yandex API Gateway resource
 │   ├── outputs.tf          # Output values
 │   └── environments/

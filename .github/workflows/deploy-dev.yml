@@ -11,6 +11,7 @@ env:
   TF_VAR_folder_id: ${{ secrets.YC_FOLDER_ID_DEV }}
   TF_VAR_environment: dev
   TF_VAR_tfstate_bucket: plankabot-tfstate-dev
+  TF_VAR_yandex_llm_api_key: ${{ secrets.YANDEX_LLM_API_KEY_DEV }}
   AWS_ACCESS_KEY_ID: ${{ secrets.YC_S3_ACCESS_KEY_DEV }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.YC_S3_SECRET_KEY_DEV }}
 

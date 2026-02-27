@@ -20,6 +20,8 @@ def mock_vk_session():
 def set_env(monkeypatch):
     monkeypatch.setenv("VK_GROUP_TOKEN", "test_group_token")
     monkeypatch.setenv("VK_CONFIRMATION_TOKEN", "test_confirmation_token")
+    monkeypatch.setenv("YANDEX_FOLDER_ID", "test_folder_id")
+    monkeypatch.setenv("YANDEX_LLM_API_KEY", "test_llm_api_key")
 
 
 @pytest.fixture()
@@ -58,6 +60,11 @@ class TestProcessMessageRouting:
             bot_module.process_message(make_msg("ебать гусей"))
         mock_fn.assert_called_once()
 
+    def test_routes_geese_command_with_context(self, bot_module):
+        with patch.object(bot_module, "handle_geese") as mock_fn:
+            bot_module.process_message(make_msg("ебать гусей причмокивая"))
+        mock_fn.assert_called_once()
+
     def test_routes_planka_command(self, bot_module):
         with patch.object(bot_module, "handle_planka") as mock_fn:
             bot_module.process_message(make_msg("планка"))
@@ -93,33 +100,87 @@ class TestHandleGuide:
 
 
 class TestHandleGeese:
-    def test_jokes_list_has_10_entries(self, bot_module):
-        assert len(bot_module.GOOSEFUCK_JOKES) == 10
+    def test_placeholder_messages_list_has_10_entries(self, bot_module):
+        assert len(bot_module.GEESE_PLACEHOLDER_MESSAGES) == 10
 
-    def test_all_jokes_are_non_empty_strings(self, bot_module):
-        for joke in bot_module.GOOSEFUCK_JOKES:
-            assert isinstance(joke, str) and len(joke) > 0
+    def test_all_placeholder_messages_are_non_empty_strings(self, bot_module):
+        for msg in bot_module.GEESE_PLACEHOLDER_MESSAGES:
+            assert isinstance(msg, str) and len(msg) > 0
 
-    def test_all_jokes_end_with_signature(self, bot_module):
-        for joke in bot_module.GOOSEFUCK_JOKES:
-            assert joke.endswith("Вы ебете гусей"), f"Joke does not end with 'Вы ебете гусей': {joke!r}"
-
-    def test_sends_one_of_the_jokes(self, bot_module):
+    def test_sends_placeholder_first_then_story(self, bot_module):
+        """Two send_message calls: placeholder first, story second."""
         msg = make_msg("ебать гусей")
-        with patch.object(bot_module, "send_message") as mock_send:
-            bot_module.handle_geese(msg)
-        mock_send.assert_called_once()
-        peer_id, text = mock_send.call_args[0]
-        assert peer_id == msg["peer_id"]
-        assert text in bot_module.GOOSEFUCK_JOKES
+        story_text = "Мудрая история про гусей. Сделай планку."
 
-    def test_random_choice_is_used(self, bot_module):
-        """Verify random.choice is called with the full jokes list."""
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "_call_llm", return_value=story_text):
+            bot_module.handle_geese(msg, "ебать гусей")
+
+        assert mock_send.call_count == 2
+        first_call_text = mock_send.call_args_list[0][0][1]
+        second_call_text = mock_send.call_args_list[1][0][1]
+        assert first_call_text in bot_module.GEESE_PLACEHOLDER_MESSAGES
+        assert second_call_text == story_text + "\n\nВы ебете гусей."
+
+    def test_extra_context_parsed_correctly(self, bot_module):
+        """Extra context after 'ебать гусей' is passed to the LLM."""
+        msg = make_msg("ебать гусей причмокивая")
+
+        with patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "_call_llm", return_value="story") as mock_llm:
+            bot_module.handle_geese(msg, "ебать гусей причмокивая")
+
+        mock_llm.assert_called_once_with("причмокивая")
+
+    def test_no_extra_context_passes_empty_string(self, bot_module):
         msg = make_msg("ебать гусей")
-        with patch("bot.random.choice", return_value=bot_module.GOOSEFUCK_JOKES[0]) as mock_choice, \
-             patch.object(bot_module, "send_message"):
-            bot_module.handle_geese(msg)
-        mock_choice.assert_called_once_with(bot_module.GOOSEFUCK_JOKES)
+
+        with patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "_call_llm", return_value="story") as mock_llm:
+            bot_module.handle_geese(msg, "ебать гусей")
+
+        mock_llm.assert_called_once_with("")
+
+    def test_llm_failure_sends_error_message(self, bot_module):
+        """If LLM throws, user gets a friendly error message instead of crashing."""
+        msg = make_msg("ебать гусей")
+
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "_call_llm", side_effect=RuntimeError("api error")):
+            bot_module.handle_geese(msg, "ебать гусей")
+
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "Гуси молчат" in error_text
+
+    def test_peer_id_correct_in_both_messages(self, bot_module):
+        msg = make_msg("ебать гусей", peer_id=2000000042)
+
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "_call_llm", return_value="story"):
+            bot_module.handle_geese(msg, "ебать гусей")
+
+        for c in mock_send.call_args_list:
+            assert c[0][0] == 2000000042
+
+    def test_random_placeholder_is_used(self, bot_module):
+        """Verify random.choice is called with GEESE_PLACEHOLDER_MESSAGES."""
+        msg = make_msg("ебать гусей")
+        with patch("bot.random.choice", return_value=bot_module.GEESE_PLACEHOLDER_MESSAGES[0]) as mock_choice, \
+             patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "_call_llm", return_value="story"):
+            bot_module.handle_geese(msg, "ебать гусей")
+        mock_choice.assert_called_once_with(bot_module.GEESE_PLACEHOLDER_MESSAGES)
+
+    def test_extra_context_case_insensitive_trigger(self, bot_module):
+        """Trigger is matched case-insensitively; context still extracted correctly."""
+        msg = make_msg("Ебать Гусей ГРОМКО")
+
+        with patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "_call_llm", return_value="story") as mock_llm:
+            bot_module.handle_geese(msg, "Ебать Гусей ГРОМКО")
+
+        mock_llm.assert_called_once_with("ГРОМКО")
 
 
 class TestHandleStats:
