@@ -363,14 +363,25 @@ class TestHandlePlanka:
 
 class TestProcessMessageTracking:
     def test_saves_message_on_every_group_chat_message(self, bot_module, db_module):
-        """Every message in a group chat is saved to chat_messages."""
+        """Every message in a group chat is saved using peer_id + conversation_message_id key."""
         msg = make_msg("привет", peer_id=2000000001, from_id=111)
-        msg["id"] = 42
+        msg["id"] = 0  # msg["id"] is 0 in group chats (unreliable)
+        msg["conversation_message_id"] = 2709
         with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
              patch.object(db_module, "save_message") as mock_save, \
              patch.object(bot_module, "send_message"):
             bot_module.process_message(msg)
-        mock_save.assert_called_once_with("42", 111, "Иван Иванов", "привет")
+        mock_save.assert_called_once_with("2000000001_2709", 111, "Иван Иванов", "привет")
+
+    def test_does_not_save_without_conversation_message_id(self, bot_module, db_module):
+        """If conversation_message_id is missing, message is not saved."""
+        msg = make_msg("привет", peer_id=2000000001, from_id=111)
+        # no conversation_message_id key
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "send_message"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
 
     def test_save_message_failure_does_not_prevent_routing(self, bot_module, db_module):
         """If save_message raises, the command is still handled."""
