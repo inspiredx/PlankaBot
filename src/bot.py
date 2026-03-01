@@ -33,6 +33,7 @@ def _load_prompt(filename: str) -> str:
 
 GEESE_STORY_PROMPT = _load_prompt("geese_story_prompt.txt")
 WHO_IS_TODAY_PROMPT = _load_prompt("who_is_today_prompt.txt")
+EXPLAIN_PROMPT = _load_prompt("explain_prompt.txt")
 
 # ---------------------------------------------------------------------------
 # Token economy constants for кто сегодня
@@ -63,6 +64,27 @@ WHO_IS_TODAY_PLACEHOLDER_MESSAGES = [
     "Анализирую улики. Кто-то сегодня явно отличился.",
     "Один момент, провожу расследование…",
     "Сейчас разберёмся, кто тут герой дня.",
+]
+
+EXPLAIN_PLACEHOLDER_MESSAGES = [
+    "Минуту, перевариваю текст…",
+    "Уже читаю. Сейчас объясню.",
+    "Хм, интересно. Перекладываю на нужный язык…",
+    "Осмысляю. Жди.",
+    "Секунду — ищу подходящие слова.",
+]
+
+DEFAULT_EXPLAIN_STYLES = [
+    "по-пацански",
+    "как Шекспир",
+    "как диктор советского радио",
+    "как рэпер из 90-х",
+    "как уставший учитель химии",
+    "как стартапер на питче",
+    "как бабушка на лавочке",
+    "как футбольный комментатор",
+    "как военный на брифинге",
+    "как философ-экзистенциалист",
 ]
 
 
@@ -149,6 +171,9 @@ def handle_guide(msg):
         "• ебать гусей [контекст] — мудрая история про гусей и планку.\n"
         "• кто сегодня [вопрос] — определить победителя дня по переписке в чате.\n"
         "  Например: кто сегодня больше всех похож на Цоя?\n"
+        "• объясни [как] — объяснить приложенное сообщение в нужном стиле.\n"
+        "  Ответь на сообщение или перешли его, затем напиши «объясни по-пацански».\n"
+        "  Если стиль не указан — выберу сам. Можно переслать несколько сообщений.\n"
     )
     send_message(peer_id, text)
 
@@ -213,6 +238,79 @@ def _build_who_is_today_input(question: str, user_messages: list[tuple[str, list
         f"Переписка участников за сегодня:\n\n"
         f"{messages_block}"
     )
+
+
+def _call_explain_llm(text_to_explain: str, style: str) -> str:
+    """Call LLM to explain text_to_explain in the given style."""
+    client = openai.OpenAI(
+        api_key=YANDEX_LLM_API_KEY,
+        base_url="https://ai.api.cloud.yandex.net/v1",
+        project=YANDEX_FOLDER_ID,
+    )
+    llm_input = f"Стиль объяснения: {style}\n\nТекст:\n{text_to_explain}"
+    response = client.responses.create(
+        model=f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite/latest",
+        temperature=0.85,
+        instructions=EXPLAIN_PROMPT,
+        input=llm_input,
+        max_output_tokens=600,
+    )
+    return response.output_text
+
+
+def handle_explain(msg, text_raw: str):
+    """
+    Handle "объясни [как]" command.
+
+    Extracts the text to explain from reply_message or fwd_messages,
+    then calls LLM to explain it in the requested style.
+    """
+    peer_id = msg["peer_id"]
+
+    # Step 1 — extract text to explain
+    source_text = None
+
+    reply = msg.get("reply_message")
+    if reply and reply.get("text"):
+        source_text = reply["text"]
+    else:
+        fwd = msg.get("fwd_messages") or []
+        texts = [m["text"] for m in fwd if m.get("text")]
+        if texts:
+            source_text = "\n\n".join(texts)
+
+    if not source_text:
+        send_message(
+            peer_id,
+            "Ответь на сообщение или перешли его, а потом напиши «объясни [как]»."
+        )
+        return
+
+    # Step 2 — extract style
+    trigger = "объясни"
+    lower_raw = text_raw.lower()
+    idx = lower_raw.find(trigger)
+    if idx != -1:
+        style = text_raw[idx + len(trigger):].strip()
+    else:
+        style = ""
+
+    if not style:
+        style = random.choice(DEFAULT_EXPLAIN_STYLES)
+
+    logger.warning("handle_explain: style=%r source_text=%r", style, source_text[:80])
+
+    # Step 3 — send placeholder, then call LLM
+    send_message(peer_id, random.choice(EXPLAIN_PLACEHOLDER_MESSAGES))
+
+    try:
+        explanation = _call_explain_llm(source_text, style)
+    except Exception as e:
+        logger.error("LLM call failed for explain: %s", e)
+        send_message(peer_id, "Что-то пошло не так. Попробуй позже.")
+        return
+
+    send_message(peer_id, explanation)
 
 
 def _call_who_is_today_llm(question: str, user_messages: list[tuple[str, list[str]]]) -> str:
@@ -347,6 +445,7 @@ def process_message(msg):
         or text == "гайд"
         or text.startswith("ебать гусей")
         or text.startswith("кто сегодня")
+        or text.startswith("объясни")
     )
     if user_id and message_id and text_raw and not _is_bot_command:
         try:
@@ -370,3 +469,6 @@ def process_message(msg):
 
     elif text.startswith("кто сегодня"):
         handle_who_is_today(msg, text_raw)
+
+    elif text.startswith("объясни"):
+        handle_explain(msg, text_raw)
