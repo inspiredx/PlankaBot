@@ -23,6 +23,7 @@ def set_env(monkeypatch):
     monkeypatch.delenv("YDB_DATABASE", raising=False)
     monkeypatch.setenv("VK_GROUP_TOKEN", "test")
     monkeypatch.setenv("VK_CONFIRMATION_TOKEN", "test")
+    monkeypatch.setenv("VK_SECRET_KEY", "test_secret_key")
     monkeypatch.setenv("PLANK_TIMEZONE", "Europe/Moscow")
 
 

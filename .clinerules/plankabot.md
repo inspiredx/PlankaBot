@@ -72,6 +72,7 @@ terraform/
 |---|---|---|
 | `VK_GROUP_TOKEN` | VK group API token | required |
 | `VK_CONFIRMATION_TOKEN` | VK callback confirmation token | required |
+| `VK_SECRET_KEY` | VK Callback API secret key for request validation | required |
 | `YANDEX_FOLDER_ID` | Yandex Cloud folder ID | required |
 | `YANDEX_LLM_API_KEY` | API key for LLM SA | required |
 | `YDB_ENDPOINT` | YDB endpoint (grpcs://...) | required |
@@ -92,6 +93,7 @@ terraform/
 ## Rules for Updating This File
 - **Update this cline rule** whenever new commands are added, data schema changes, new env vars are introduced, or the deployment process changes.
 - Keep the command list, data architecture, and env var table in sync with the actual code.
+- **Keep `README.md` up to date**: update the README whenever env vars, commands, deployment steps, or setup instructions change.
 
 ## General rules 
 - **Non-Invasive Changes**: Avoid breaking changes or massive refactorings when implementing small features or fixes.

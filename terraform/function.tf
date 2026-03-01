@@ -71,6 +71,7 @@ resource "yandex_function" "plankabot" {
   environment = {
     VK_GROUP_TOKEN        = var.vk_group_token
     VK_CONFIRMATION_TOKEN = var.vk_confirmation_token
+    VK_SECRET_KEY         = var.vk_secret_key
     YANDEX_FOLDER_ID      = var.folder_id
     YANDEX_LLM_API_KEY    = var.yandex_llm_api_key
     YDB_ENDPOINT          = yandex_ydb_database_serverless.plankabot.ydb_api_endpoint

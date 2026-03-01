@@ -31,6 +31,12 @@ variable "vk_confirmation_token" {
   sensitive   = true
 }
 
+variable "vk_secret_key" {
+  description = "VK Callback API secret key for request validation (set in VK group settings → Callback API → Secret key)"
+  type        = string
+  sensitive   = true
+}
+
 variable "tfstate_bucket" {
   description = "Object Storage bucket name used for Terraform state"
   type        = string

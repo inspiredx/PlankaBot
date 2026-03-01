@@ -18,10 +18,14 @@ def mock_vk_session():
         yield mock_cls
 
 
+TEST_SECRET = "test_secret_key"
+
+
 @pytest.fixture(autouse=True)
 def set_env(monkeypatch):
     monkeypatch.setenv("VK_GROUP_TOKEN", "test_group_token")
     monkeypatch.setenv("VK_CONFIRMATION_TOKEN", "test_confirmation_token")
+    monkeypatch.setenv("VK_SECRET_KEY", TEST_SECRET)
 
 
 def make_event(body: dict) -> dict:
@@ -37,7 +41,7 @@ def test_confirmation_event_returns_token():
     import handler
     importlib.reload(handler)
 
-    event = make_event({"type": "confirmation"})
+    event = make_event({"type": "confirmation", "secret": TEST_SECRET})
     result = handler.handler(event, {})
 
     assert result["statusCode"] == 200
@@ -49,7 +53,7 @@ def test_unknown_event_returns_ok():
     import handler
     importlib.reload(handler)
 
-    event = make_event({"type": "wall_post_new"})
+    event = make_event({"type": "wall_post_new", "secret": TEST_SECRET})
     result = handler.handler(event, {})
 
     assert result["statusCode"] == 200
@@ -61,6 +65,7 @@ def test_invalid_json_returns_400():
     import handler
     importlib.reload(handler)
 
+    # Secret check happens after JSON parsing, so malformed JSON still returns 400
     event = {"body": "not json {{"}
     result = handler.handler(event, {})
 
@@ -74,6 +79,7 @@ def test_message_new_dispatches_to_process_message():
 
     msg_payload = {
         "type": "message_new",
+        "secret": TEST_SECRET,
         "object": {
             "message": {
                 "peer_id": 2000000001,
@@ -98,6 +104,7 @@ def test_message_new_exception_still_returns_ok():
 
     msg_payload = {
         "type": "message_new",
+        "secret": TEST_SECRET,
         "object": {"message": {"peer_id": 2000000001, "from_id": 1, "text": "test"}},
     }
 
@@ -106,3 +113,53 @@ def test_message_new_exception_still_returns_ok():
 
     assert result["statusCode"] == 200
     assert result["body"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# VK secret key validation tests
+# ---------------------------------------------------------------------------
+
+class TestSecretKeyValidation:
+    """Tests for VK Callback API secret field validation."""
+
+    def _reload_handler_with_secret(self, monkeypatch, secret_value):
+        """Helper: set VK_SECRET_KEY env var and reload handler + config."""
+        import importlib
+        import config as cfg
+        import handler as h
+
+        monkeypatch.setenv("VK_SECRET_KEY", secret_value)
+        importlib.reload(cfg)
+        importlib.reload(h)
+        return h
+
+    def test_correct_secret_passes(self, monkeypatch):
+        h = self._reload_handler_with_secret(monkeypatch, "mysecret")
+        event = make_event({"type": "message_new", "secret": "mysecret",
+                            "object": {"message": {"peer_id": 2000000001, "from_id": 1, "text": "гайд"}}})
+        with patch("handler.process_message"):
+            result = h.handler(event, {})
+        assert result["statusCode"] == 200
+
+    def test_wrong_secret_returns_403(self, monkeypatch):
+        h = self._reload_handler_with_secret(monkeypatch, "mysecret")
+        event = make_event({"type": "message_new", "secret": "wrongsecret",
+                            "object": {"message": {"peer_id": 2000000001, "from_id": 1, "text": "гайд"}}})
+        result = h.handler(event, {})
+        assert result["statusCode"] == 403
+        assert result["body"] == "Forbidden"
+
+    def test_missing_secret_field_returns_403(self, monkeypatch):
+        h = self._reload_handler_with_secret(monkeypatch, "mysecret")
+        event = make_event({"type": "message_new",
+                            "object": {"message": {"peer_id": 2000000001, "from_id": 1, "text": "гайд"}}})
+        result = h.handler(event, {})
+        assert result["statusCode"] == 403
+        assert result["body"] == "Forbidden"
+
+    def test_no_secret_field_when_key_configured_returns_403(self, monkeypatch):
+        """A request with no secret field at all is rejected even if secret key is configured."""
+        h = self._reload_handler_with_secret(monkeypatch, "mysecret")
+        event = make_event({"type": "wall_post_new"})
+        result = h.handler(event, {})
+        assert result["statusCode"] == 403

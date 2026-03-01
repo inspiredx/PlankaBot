@@ -20,6 +20,7 @@ def mock_vk_session():
 def set_env(monkeypatch):
     monkeypatch.setenv("VK_GROUP_TOKEN", "test_group_token")
     monkeypatch.setenv("VK_CONFIRMATION_TOKEN", "test_confirmation_token")
+    monkeypatch.setenv("VK_SECRET_KEY", "test_secret_key")
     monkeypatch.setenv("YANDEX_FOLDER_ID", "test_folder_id")
     monkeypatch.setenv("YANDEX_LLM_API_KEY", "test_llm_api_key")
     monkeypatch.delenv("YDB_ENDPOINT", raising=False)

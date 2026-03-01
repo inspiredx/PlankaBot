@@ -12,6 +12,8 @@ tfstate_bucket = "plankabot-tfstate-prod"
 # VK secrets — fill in or override via TF_VAR_* env vars
 vk_group_token        = "REPLACE_WITH_VK_GROUP_TOKEN"
 vk_confirmation_token = "REPLACE_WITH_VK_CONFIRMATION_TOKEN"
+# Set in VK group settings → Callback API → Secret key (up to 50 alphanumeric chars)
+vk_secret_key         = "REPLACE_WITH_VK_SECRET_KEY"
 
 # Yandex AI Studio API key for the plankabot-llm-prod service account.
 # Created manually in YC Console after first terraform apply — see README "Post-deploy checklist".

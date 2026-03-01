@@ -2,6 +2,7 @@ import os
 
 VK_GROUP_TOKEN = os.getenv("VK_GROUP_TOKEN")
 VK_CONFIRMATION_TOKEN = os.getenv("VK_CONFIRMATION_TOKEN")
+VK_SECRET_KEY = os.environ["VK_SECRET_KEY"]
 
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID", "")
 YANDEX_LLM_API_KEY = os.getenv("YANDEX_LLM_API_KEY", "")

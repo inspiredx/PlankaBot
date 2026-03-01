@@ -7,6 +7,7 @@ on:
 env:
   TF_VAR_vk_group_token: ${{ secrets.VK_GROUP_TOKEN_DEV }}
   TF_VAR_vk_confirmation_token: ${{ secrets.VK_CONFIRMATION_TOKEN_DEV }}
+  TF_VAR_vk_secret_key: ${{ secrets.VK_SECRET_KEY_DEV }}
   TF_VAR_cloud_id: ${{ secrets.YC_CLOUD_ID }}
   TF_VAR_folder_id: ${{ secrets.YC_FOLDER_ID_DEV }}
   TF_VAR_environment: dev

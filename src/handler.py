@@ -1,6 +1,7 @@
 import json
 import logging
 
+import config
 from config import VK_CONFIRMATION_TOKEN
 from bot import process_message
 
@@ -30,6 +31,11 @@ def handler(event, context):
     except (json.JSONDecodeError, TypeError) as e:
         logger.error("Failed to parse request body: %s", e)
         return {"statusCode": 400, "body": "bad request"}
+
+    # Validate the VK secret key (required)
+    if data.get("secret") != config.VK_SECRET_KEY:
+        logger.warning("Rejected request: invalid or missing secret field")
+        return {"statusCode": 403, "body": "Forbidden"}
 
     event_type = data.get("type")
     logger.warning("Received VK event type: %s", event_type)
