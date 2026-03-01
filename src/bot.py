@@ -14,6 +14,10 @@ logging.getLogger().setLevel(logging.DEBUG)
 logging.getLogger(__name__).setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_OUTPUT_TOKENS = 300
+DEFAULT_MODEL= 'yandexgpt/rc'
+DEFAULT_TEMPERATURE = 0.9
+
 # ---------------------------------------------------------------------------
 # Load prompts once at module import time.
 # In the deployed function files live at prompts/<name> relative to cwd;
@@ -30,7 +34,6 @@ def _load_prompt(filename: str) -> str:
                 return f.read().strip()
     return ""
 
-
 GEESE_STORY_PROMPT = _load_prompt("geese_story_prompt.txt")
 WHO_IS_TODAY_PROMPT = _load_prompt("who_is_today_prompt.txt")
 EXPLAIN_PROMPT = _load_prompt("explain_prompt.txt")
@@ -43,7 +46,7 @@ EXPLAIN_PROMPT = _load_prompt("explain_prompt.txt")
 # Remaining budget for user messages: ~31,000 tokens.
 # Rough estimate: 1 token ≈ 3.5 Russian characters.
 _WHO_IS_TODAY_CHAR_BUDGET = 31_000 * 3  # ~93,000 chars total for all users
-_WHO_IS_TODAY_MAX_OUTPUT_TOKENS = 600
+_WHO_IS_TODAY_MAX_OUTPUT_TOKENS = DEFAULT_MAX_OUTPUT_TOKENS
 
 GEESE_PLACEHOLDER_MESSAGES = [
     "Ну хорошо хорошо, сейчас подумаем, что можно сделать…",
@@ -186,11 +189,11 @@ def _call_llm(extra_context: str) -> str:
         project=YANDEX_FOLDER_ID,
     )
     response = client.responses.create(
-        model=f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite/latest",
-        temperature=0.8,
+        model=f"gpt://{YANDEX_FOLDER_ID}/{DEFAULT_MODEL}",
+        temperature=DEFAULT_TEMPERATURE,
         instructions=GEESE_STORY_PROMPT,
         input=extra_context if extra_context else "просто история",
-        max_output_tokens=500,
+        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
     )
     return response.output_text
 
@@ -249,11 +252,11 @@ def _call_explain_llm(text_to_explain: str, style: str) -> str:
     )
     llm_input = f"Стиль объяснения: {style}\n\nТекст:\n{text_to_explain}"
     response = client.responses.create(
-        model=f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite/latest",
-        temperature=0.85,
+        model=f"gpt://{YANDEX_FOLDER_ID}/{DEFAULT_MODEL}",
+        temperature=DEFAULT_TEMPERATURE,
         instructions=EXPLAIN_PROMPT,
         input=llm_input,
-        max_output_tokens=600,
+        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
     )
     return response.output_text
 
@@ -322,8 +325,8 @@ def _call_who_is_today_llm(question: str, user_messages: list[tuple[str, list[st
     )
     llm_input = _build_who_is_today_input(question, user_messages)
     response = client.responses.create(
-        model=f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite/latest",
-        temperature=0.7,
+        model=f"gpt://{YANDEX_FOLDER_ID}/{DEFAULT_MODEL}",
+        temperature=DEFAULT_TEMPERATURE,
         instructions=WHO_IS_TODAY_PROMPT,
         input=llm_input,
         max_output_tokens=_WHO_IS_TODAY_MAX_OUTPUT_TOKENS,
