@@ -559,6 +559,181 @@ class TestHandleWhoIsToday:
 
 
 # ---------------------------------------------------------------------------
+# handle_explain
+# ---------------------------------------------------------------------------
+
+class TestHandleExplain:
+    def _make_msg_with_reply(self, reply_text: str, peer_id: int = 2000000001, from_id: int = 111):
+        msg = make_msg("объясни по-пацански", peer_id=peer_id, from_id=from_id)
+        msg["reply_message"] = {"text": reply_text, "from_id": 999, "id": 1}
+        return msg
+
+    def _make_msg_with_fwd(self, fwd_texts: list, peer_id: int = 2000000001, from_id: int = 111):
+        msg = make_msg("объясни как Шекспир", peer_id=peer_id, from_id=from_id)
+        msg["fwd_messages"] = [{"text": t, "from_id": 999, "id": i} for i, t in enumerate(fwd_texts)]
+        return msg
+
+    def test_reply_message_calls_llm_with_reply_text(self, bot_module):
+        """Reply message text is passed to LLM."""
+        msg = self._make_msg_with_reply("интересно")
+        with patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "_call_explain_llm", return_value="объяснение") as mock_llm:
+            bot_module.handle_explain(msg, "объясни по-пацански")
+        mock_llm.assert_called_once()
+        text_arg = mock_llm.call_args[0][0]
+        assert text_arg == "интересно"
+
+    def test_reply_message_passes_style_to_llm(self, bot_module):
+        """Style after 'объясни' is passed to LLM."""
+        msg = self._make_msg_with_reply("интересно")
+        with patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "_call_explain_llm", return_value="объяснение") as mock_llm:
+            bot_module.handle_explain(msg, "объясни по-пацански")
+        style_arg = mock_llm.call_args[0][1]
+        assert style_arg == "по-пацански"
+
+    def test_fwd_messages_concatenated(self, bot_module):
+        """All forwarded message texts are concatenated and passed to LLM."""
+        msg = self._make_msg_with_fwd(["Первое сообщение", "Второе сообщение"])
+        with patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "_call_explain_llm", return_value="объяснение") as mock_llm:
+            bot_module.handle_explain(msg, "объясни как Шекспир")
+        text_arg = mock_llm.call_args[0][0]
+        assert "Первое сообщение" in text_arg
+        assert "Второе сообщение" in text_arg
+
+    def test_fwd_messages_skips_empty_texts(self, bot_module):
+        """Forwarded messages with empty text are skipped."""
+        msg = self._make_msg_with_fwd(["", "Только это"])
+        with patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "_call_explain_llm", return_value="объяснение") as mock_llm:
+            bot_module.handle_explain(msg, "объясни как Шекспир")
+        text_arg = mock_llm.call_args[0][0]
+        assert text_arg == "Только это"
+
+    def test_no_reply_no_fwd_sends_hint(self, bot_module):
+        """No reply and no fwd → hint message, LLM not called."""
+        msg = make_msg("объясни по-пацански")
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "_call_explain_llm") as mock_llm:
+            bot_module.handle_explain(msg, "объясни по-пацански")
+        mock_send.assert_called_once()
+        hint = mock_send.call_args[0][1]
+        assert "ответь" in hint.lower() or "перешли" in hint.lower()
+        mock_llm.assert_not_called()
+
+    def test_no_style_uses_random_default(self, bot_module):
+        """No style after 'объясни' → picks from DEFAULT_EXPLAIN_STYLES."""
+        msg = self._make_msg_with_reply("текст")
+        # random.choice is called twice: once for style, once for placeholder.
+        # We need style call to return from DEFAULT_EXPLAIN_STYLES.
+        with patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "_call_explain_llm", return_value="ответ") as mock_llm:
+            with patch("bot.random.choice", side_effect=["по-пацански", "Минуту, перевариваю текст…"]) as mock_choice:
+                bot_module.handle_explain(msg, "объясни")
+        assert mock_choice.call_args_list[0][0][0] == bot_module.DEFAULT_EXPLAIN_STYLES
+        style_arg = mock_llm.call_args[0][1]
+        assert style_arg == "по-пацански"
+
+    def test_sends_placeholder_then_explanation(self, bot_module):
+        """Two send_message calls: placeholder first, explanation second."""
+        msg = self._make_msg_with_reply("интересно")
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "_call_explain_llm", return_value="объяснение"):
+            bot_module.handle_explain(msg, "объясни по-пацански")
+        assert mock_send.call_count == 2
+        placeholder = mock_send.call_args_list[0][0][1]
+        assert placeholder in bot_module.EXPLAIN_PLACEHOLDER_MESSAGES
+        explanation = mock_send.call_args_list[1][0][1]
+        assert explanation == "объяснение"
+
+    def test_llm_failure_sends_error_message(self, bot_module):
+        """LLM error → placeholder + friendly error message sent."""
+        msg = self._make_msg_with_reply("текст")
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "_call_explain_llm", side_effect=RuntimeError("api error")):
+            bot_module.handle_explain(msg, "объясни по-пацански")
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "пошло не так" in error_text.lower()
+
+    def test_peer_id_used_correctly(self, bot_module):
+        """All send_message calls use the correct peer_id."""
+        msg = self._make_msg_with_reply("текст", peer_id=2000000099)
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "_call_explain_llm", return_value="ответ"):
+            bot_module.handle_explain(msg, "объясни по-пацански")
+        for c in mock_send.call_args_list:
+            assert c[0][0] == 2000000099
+
+    def test_reply_takes_priority_over_fwd(self, bot_module):
+        """If both reply_message and fwd_messages are present, reply wins."""
+        msg = make_msg("объясни по-пацански")
+        msg["reply_message"] = {"text": "текст из ответа", "from_id": 1, "id": 1}
+        msg["fwd_messages"] = [{"text": "текст из пересылки", "from_id": 2, "id": 2}]
+        with patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "_call_explain_llm", return_value="ответ") as mock_llm:
+            bot_module.handle_explain(msg, "объясни по-пацански")
+        text_arg = mock_llm.call_args[0][0]
+        assert text_arg == "текст из ответа"
+
+    def test_fwd_all_empty_sends_hint(self, bot_module):
+        """fwd_messages with all empty texts → hint, no LLM."""
+        msg = self._make_msg_with_fwd(["", ""])
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "_call_explain_llm") as mock_llm:
+            bot_module.handle_explain(msg, "объясни как Шекспир")
+        mock_send.assert_called_once()
+        mock_llm.assert_not_called()
+
+    def test_style_extracted_case_insensitive(self, bot_module):
+        """Trigger matched case-insensitively; style extracted correctly."""
+        msg = self._make_msg_with_reply("текст")
+        with patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "_call_explain_llm", return_value="ответ") as mock_llm:
+            bot_module.handle_explain(msg, "Объясни КАК ШЕКСПИР")
+        style_arg = mock_llm.call_args[0][1]
+        assert style_arg == "КАК ШЕКСПИР"
+
+
+# ---------------------------------------------------------------------------
+# process_message — объясни routing and tracking
+# ---------------------------------------------------------------------------
+
+class TestProcessMessageExplain:
+    def test_routes_obyasni_command(self, bot_module):
+        """'объясни' is routed to handle_explain."""
+        msg = make_msg("объясни по-пацански")
+        with patch.object(bot_module, "handle_explain") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"):
+            bot_module.process_message(msg)
+        mock_fn.assert_called_once()
+
+    def test_routes_obyasni_no_style(self, bot_module):
+        """'объясни' alone is still routed."""
+        msg = make_msg("объясни")
+        with patch.object(bot_module, "handle_explain") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"):
+            bot_module.process_message(msg)
+        mock_fn.assert_called_once()
+
+    @pytest.mark.parametrize("command", [
+        "объясни",
+        "объясни по-пацански",
+        "объясни как Шекспир",
+    ])
+    def test_does_not_save_obyasni_command(self, bot_module, db_module, command):
+        """'объясни' commands are excluded from chat_messages tracking."""
+        msg = make_msg(command, peer_id=2000000001, from_id=111)
+        msg["conversation_message_id"] = 300
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "handle_explain"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # _build_who_is_today_input — token economy
 # ---------------------------------------------------------------------------
 

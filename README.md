@@ -292,6 +292,7 @@ pytest tests/ -v
 | `гайд` | Show command help |
 | `ебать гусей [context]` | Generate a goose-wisdom story via LLM |
 | `кто сегодня [question]` | Analyze today's chat and pick a winner. E.g. `кто сегодня больше всех похож на Цоя?` |
+| `объясни [как]` | Explain a replied-to or forwarded message in the given style. E.g. `объясни по-пацански`. If no style given, one is chosen at random. |
 
 All commands work in VK group chats only.
 
@@ -308,7 +309,8 @@ PlankaBot/
 │   ├── config.py           # Configuration from environment variables
 │   └── prompts/
 │       ├── geese_story_prompt.txt      # System prompt for the LLM geese story
-│       └── who_is_today_prompt.txt     # System prompt for кто сегодня
+│       ├── who_is_today_prompt.txt     # System prompt for кто сегодня
+│       └── explain_prompt.txt          # System prompt for объясни
 ├── tests/
 │   ├── test_handler.py     # Handler unit tests
 │   ├── test_bot.py         # Bot logic unit tests

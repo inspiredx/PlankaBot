@@ -19,6 +19,7 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - `гайд` — show command help
 - `ебать гусей [context]` — generate a goose-wisdom story via LLM
 - `кто сегодня [question]` — analyze today's chat messages and pick a winner based on the question (e.g. "кто сегодня больше всех похож на Цоя?")
+- `объясни [как]` — explain a replied-to or forwarded message in the requested style (e.g. "объясни по-пацански"); if no style given, one is chosen at random
 
 ## Data Architecture (YDB Serverless, row-oriented)
 ### `users` table
@@ -100,6 +101,7 @@ terraform/
 - Tests live in `tests/`, run with `pytest`
 - YDB layer is fully mocked in tests — no real YDB connection needed
 - CI runs `pip install -r requirements.txt -r requirements-dev.txt && pytest tests/ -v`
+- Use venv ./.venv/bin/activate defined in project directory for tests and other things
 
 ## Deployment
 - Push to any branch triggers `deploy-dev.yml`
