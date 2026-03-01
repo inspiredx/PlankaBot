@@ -90,3 +90,9 @@ terraform/
 ## Rules for Updating This File
 - **Update this cline rule** whenever new commands are added, data schema changes, new env vars are introduced, or the deployment process changes.
 - Keep the command list, data architecture, and env var table in sync with the actual code.
+
+## General rules 
+- **Non-Invasive Changes**: Avoid breaking changes or massive refactorings when implementing small features or fixes.
+- **Refactoring**: Only refactor to the "proper" architecture if explicitly requested or if the current state blocks the task.
+- **Testing**: Always write tests
+- After each task, provide git-commitable summary
