@@ -129,11 +129,12 @@ class TestMarkPlankFirstToday:
         count_result = make_result_set([make_count_row(0)])
 
         mock_tx = MagicMock()
-        # execute calls: upsert_user, check_count, insert
+        # execute calls: fetch_user, upsert_user, check_count, insert
         mock_tx.execute.side_effect = [
-            None,               # upsert user
-            count_result,       # check existing record → count=0
-            None,               # insert plank record
+            make_result_set([]),  # fetch existing user → not found
+            None,                 # upsert user
+            count_result,         # check existing record → count=0
+            None,                 # insert plank record
         ]
 
         mock_session = MagicMock()
@@ -154,7 +155,7 @@ class TestMarkPlankFirstToday:
         count_result = make_result_set([make_count_row(0)])
 
         mock_tx = MagicMock()
-        mock_tx.execute.side_effect = [None, count_result, None]
+        mock_tx.execute.side_effect = [make_result_set([]), None, count_result, None]
 
         mock_session = MagicMock()
         mock_session.transaction.return_value = mock_tx
@@ -176,7 +177,7 @@ class TestMarkPlankFirstToday:
         count_result = make_result_set([make_count_row(0)])
 
         mock_tx = MagicMock()
-        mock_tx.execute.side_effect = [None, count_result, None]
+        mock_tx.execute.side_effect = [make_result_set([]), None, count_result, None]
 
         mock_session = MagicMock()
         mock_session.transaction.return_value = mock_tx
@@ -193,12 +194,12 @@ class TestMarkPlankFirstToday:
         call_args = mock_session.transaction.call_args
         assert isinstance(call_args[0][0], ydb.SerializableReadWrite)
 
-    def test_three_execute_calls_made(self, db_module):
-        """Exactly 3 execute calls: upsert user, check count, insert record."""
+    def test_four_execute_calls_made(self, db_module):
+        """Exactly 4 execute calls: fetch user, upsert user, check count, insert record."""
         count_result = make_result_set([make_count_row(0)])
 
         mock_tx = MagicMock()
-        mock_tx.execute.side_effect = [None, count_result, None]
+        mock_tx.execute.side_effect = [make_result_set([]), None, count_result, None]
 
         mock_session = MagicMock()
         mock_session.transaction.return_value = mock_tx
@@ -211,7 +212,7 @@ class TestMarkPlankFirstToday:
         with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
             db_module.mark_plank(111, "Иван Иванов", 60)
 
-        assert mock_tx.execute.call_count == 3
+        assert mock_tx.execute.call_count == 4
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +226,9 @@ class TestMarkPlankDuplicate:
 
         mock_tx = MagicMock()
         mock_tx.execute.side_effect = [
-            None,           # upsert user
-            count_result,   # check existing record → count=1
+            make_result_set([]),  # fetch existing user → not found
+            None,                 # upsert user
+            count_result,         # check existing record → count=1
         ]
 
         mock_session = MagicMock()
@@ -243,11 +245,11 @@ class TestMarkPlankDuplicate:
         assert result is False
 
     def test_no_insert_on_duplicate(self, db_module):
-        """When duplicate detected, only 2 execute calls (no insert)."""
+        """When duplicate detected, only 3 execute calls (fetch user, upsert user, check — no insert)."""
         count_result = make_result_set([make_count_row(1)])
 
         mock_tx = MagicMock()
-        mock_tx.execute.side_effect = [None, count_result]
+        mock_tx.execute.side_effect = [make_result_set([]), None, count_result]
 
         mock_session = MagicMock()
         mock_session.transaction.return_value = mock_tx
@@ -260,14 +262,14 @@ class TestMarkPlankDuplicate:
         with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
             db_module.mark_plank(111, "Иван Иванов", 60)
 
-        assert mock_tx.execute.call_count == 2
+        assert mock_tx.execute.call_count == 3
 
     def test_commits_on_duplicate(self, db_module):
         """Transaction is still committed (cleanly) on duplicate."""
         count_result = make_result_set([make_count_row(1)])
 
         mock_tx = MagicMock()
-        mock_tx.execute.side_effect = [None, count_result]
+        mock_tx.execute.side_effect = [make_result_set([]), None, count_result]
 
         mock_session = MagicMock()
         mock_session.transaction.return_value = mock_tx

@@ -111,26 +111,41 @@ def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> bool:
         tx.begin()
 
         try:
-            # Step 1: Upsert user — preserve is_bot_admin and created_at if row exists
+            # Step 1: Upsert user — preserve is_bot_admin and created_at if row exists.
+            # YDB does not support LEFT JOIN ON true, so we read the existing row first
+            # and compute COALESCE logic in Python before issuing the UPSERT.
+            fetch_user_query = """
+                DECLARE $user_id AS Int64;
+
+                SELECT is_bot_admin, created_at
+                FROM users
+                WHERE user_id = $user_id;
+            """
+            fetch_result = tx.execute(fetch_user_query, {"$user_id": user_id})
+            existing_rows = fetch_result[0].rows if fetch_result else []
+            if existing_rows:
+                is_bot_admin = existing_rows[0].is_bot_admin
+                created_at = existing_rows[0].created_at
+            else:
+                is_bot_admin = False
+                created_at = now_us
+
             upsert_user_query = """
                 DECLARE $user_id AS Int64;
                 DECLARE $name AS Utf8;
-                DECLARE $now AS Timestamp;
+                DECLARE $is_bot_admin AS Bool;
+                DECLARE $last_activity AS Timestamp;
+                DECLARE $created_at AS Timestamp;
 
                 UPSERT INTO users (user_id, name, is_bot_admin, last_activity, created_at)
-                SELECT
-                    $user_id AS user_id,
-                    $name AS name,
-                    COALESCE(e.is_bot_admin, false) AS is_bot_admin,
-                    $now AS last_activity,
-                    COALESCE(e.created_at, $now) AS created_at
-                FROM (SELECT 1) AS dummy
-                LEFT JOIN (SELECT is_bot_admin, created_at FROM users WHERE user_id = $user_id) AS e ON true;
+                VALUES ($user_id, $name, $is_bot_admin, $last_activity, $created_at);
             """
             tx.execute(upsert_user_query, {
                 "$user_id": user_id,
                 "$name": name,
-                "$now": now_us,
+                "$is_bot_admin": is_bot_admin,
+                "$last_activity": now_us,
+                "$created_at": created_at,
             })
 
             # Step 2: Check if plank_records row exists for today
