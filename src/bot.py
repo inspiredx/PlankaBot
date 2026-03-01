@@ -3,15 +3,12 @@ import os
 import random
 import vk_api
 from vk_api.utils import get_random_id
-from datetime import date
 
 import openai
 
 from config import VK_GROUP_TOKEN, YANDEX_FOLDER_ID, YANDEX_LLM_API_KEY
 import db
 
-logging.getLogger().setLevel(logging.DEBUG)
-logging.getLogger(__name__).setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_OUTPUT_TOKENS = 300
