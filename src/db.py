@@ -1,9 +1,11 @@
 """
 YDB database layer for PlankaBot.
 
-All writes use explicit SerializableReadWrite transactions (begin → ops → commit).
+Uses the YDB Query API (ydb.QuerySessionPool / ydb.QuerySession), which is the
+current recommended approach in the YDB Python SDK.
+
 The driver and session pool are initialized once at module level during cold start
-to be reused across warm Cloud Function invocations (same as the official YDB tutorial).
+to be reused across warm Cloud Function invocations.
 """
 
 import logging
@@ -60,7 +62,7 @@ def _normalize_endpoint(endpoint: str) -> str:
 
 # Module-level singletons. Tests replace _pool with a mock before calling db functions.
 _driver: Optional[ydb.Driver] = None
-_pool: Optional[ydb.SessionPool] = None
+_pool: Optional[ydb.QuerySessionPool] = None
 
 if YDB_ENDPOINT and YDB_DATABASE:
     try:
@@ -72,7 +74,7 @@ if YDB_ENDPOINT and YDB_DATABASE:
             credentials=ydb.iam.MetadataUrlCredentials(),
         )
         _driver.wait(fail_fast=True, timeout=5)
-        _pool = ydb.SessionPool(_driver)
+        _pool = ydb.QuerySessionPool(_driver)
         logger.info("YDB session pool ready")
     except Exception as _exc:
         logger.error("Failed to initialize YDB driver at module load: %s", _exc)
@@ -80,7 +82,7 @@ if YDB_ENDPOINT and YDB_DATABASE:
         _pool = None
 
 
-def _get_pool() -> ydb.SessionPool:
+def _get_pool() -> ydb.QuerySessionPool:
     if _pool is None:
         raise RuntimeError("YDB session pool is not initialized. Check YDB_ENDPOINT and YDB_DATABASE env vars.")
     return _pool
@@ -98,39 +100,44 @@ def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> bool:
     False if the user already has a record for today (duplicate).
 
     Uses an explicit SerializableReadWrite transaction:
-      1. Upsert user (create or update name + last_activity)
-      2. Check for existing plank_records row for today
-      3. If none, insert it
+      1. Read existing user row (to preserve is_bot_admin / created_at)
+      2. Upsert user (create or update name + last_activity)
+      3. Check for existing plank_records row for today
+      4. If none, insert it
     """
     pool = _get_pool()
     today = get_today_date_str()
     now_us = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
 
-    def _callee(session: ydb.Session):
-        tx = session.transaction(ydb.SerializableReadWrite())
-        tx.begin()
+    def _callee(session: ydb.QuerySession):
+        tx = session.transaction(ydb.QuerySerializableReadWrite())
 
         try:
-            # Step 1: Upsert user — preserve is_bot_admin and created_at if row exists.
-            # YDB does not support LEFT JOIN ON true, so we read the existing row first
-            # and compute COALESCE logic in Python before issuing the UPSERT.
-            fetch_user_query = """
+            # Step 1: Read existing user row to preserve is_bot_admin and created_at.
+            # YDB does not support LEFT JOIN ON true, so we read first and merge in Python.
+            with tx.execute(
+                """
                 DECLARE $user_id AS Int64;
 
                 SELECT is_bot_admin, created_at
                 FROM users
                 WHERE user_id = $user_id;
-            """
-            fetch_result = tx.execute(fetch_user_query, {"$user_id": user_id})
-            existing_rows = fetch_result[0].rows if fetch_result else []
-            if existing_rows:
-                is_bot_admin = existing_rows[0].is_bot_admin
-                created_at = existing_rows[0].created_at
+                """,
+                {"$user_id": user_id},
+                commit_tx=False,
+            ) as result_sets:
+                rows = list(result_sets)[0].rows
+
+            if rows:
+                is_bot_admin = rows[0].is_bot_admin
+                created_at = rows[0].created_at
             else:
                 is_bot_admin = False
                 created_at = now_us
 
-            upsert_user_query = """
+            # Step 2: Upsert user with preserved values
+            with tx.execute(
+                """
                 DECLARE $user_id AS Int64;
                 DECLARE $name AS Utf8;
                 DECLARE $is_bot_admin AS Bool;
@@ -139,36 +146,44 @@ def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> bool:
 
                 UPSERT INTO users (user_id, name, is_bot_admin, last_activity, created_at)
                 VALUES ($user_id, $name, $is_bot_admin, $last_activity, $created_at);
-            """
-            tx.execute(upsert_user_query, {
-                "$user_id": user_id,
-                "$name": name,
-                "$is_bot_admin": is_bot_admin,
-                "$last_activity": now_us,
-                "$created_at": created_at,
-            })
+                """,
+                {
+                    "$user_id": user_id,
+                    "$name": name,
+                    "$is_bot_admin": is_bot_admin,
+                    "$last_activity": (now_us, ydb.PrimitiveType.Timestamp),
+                    "$created_at": (created_at, ydb.PrimitiveType.Timestamp),
+                },
+                commit_tx=False,
+            ) as _:
+                pass
 
-            # Step 2: Check if plank_records row exists for today
-            check_query = """
+            # Step 3: Check if plank_records row exists for today
+            with tx.execute(
+                """
                 DECLARE $user_id AS Int64;
                 DECLARE $plank_date AS Utf8;
 
                 SELECT COUNT(*) AS cnt
                 FROM plank_records
                 WHERE user_id = $user_id AND plank_date = $plank_date;
-            """
-            result = tx.execute(check_query, {
-                "$user_id": user_id,
-                "$plank_date": today,
-            })
-            count = result[0].rows[0].cnt if result[0].rows else 0
+                """,
+                {
+                    "$user_id": user_id,
+                    "$plank_date": today,
+                },
+                commit_tx=False,
+            ) as result_sets:
+                rows = list(result_sets)[0].rows
+                count = rows[0].cnt if rows else 0
 
             if count > 0:
                 tx.commit()
                 return False
 
-            # Step 3: Insert plank record
-            insert_query = """
+            # Step 4: Insert plank record and commit
+            with tx.execute(
+                """
                 DECLARE $user_id AS Int64;
                 DECLARE $plank_date AS Utf8;
                 DECLARE $actual_seconds AS Int32?;
@@ -176,15 +191,17 @@ def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> bool:
 
                 INSERT INTO plank_records (user_id, plank_date, actual_seconds, created_at)
                 VALUES ($user_id, $plank_date, $actual_seconds, $now);
-            """
-            tx.execute(insert_query, {
-                "$user_id": user_id,
-                "$plank_date": today,
-                "$actual_seconds": actual_seconds,
-                "$now": now_us,
-            })
+                """,
+                {
+                    "$user_id": user_id,
+                    "$plank_date": today,
+                    "$actual_seconds": (actual_seconds, ydb.OptionalType(ydb.PrimitiveType.Int32)),
+                    "$now": (now_us, ydb.PrimitiveType.Timestamp),
+                },
+                commit_tx=True,
+            ) as _:
+                pass
 
-            tx.commit()
             return True
 
         except Exception:
@@ -203,54 +220,44 @@ def get_stats_for_today() -> tuple[list[str], list[str]]:
 
     done: display strings like "Иван Иванов (60)" or "Иван Иванов"
     not_done: names of users in the users table who haven't planked today
+
+    Uses execute_with_retries for these simple read-only queries.
     """
     pool = _get_pool()
     today = get_today_date_str()
 
-    def _callee(session: ydb.Session):
-        tx = session.transaction(ydb.SerializableReadWrite())
-        tx.begin()
+    done_result_sets = pool.execute_with_retries(
+        """
+        DECLARE $plank_date AS Utf8;
 
-        try:
-            done_query = """
-                DECLARE $plank_date AS Utf8;
+        SELECT u.name AS name, pr.actual_seconds AS actual_seconds
+        FROM plank_records AS pr
+        JOIN users AS u ON u.user_id = pr.user_id
+        WHERE pr.plank_date = $plank_date;
+        """,
+        {"$plank_date": today},
+    )
 
-                SELECT u.name AS name, pr.actual_seconds AS actual_seconds
-                FROM plank_records AS pr
-                JOIN users AS u ON u.user_id = pr.user_id
-                WHERE pr.plank_date = $plank_date;
-            """
-            done_result = tx.execute(done_query, {"$plank_date": today})
+    not_done_result_sets = pool.execute_with_retries(
+        """
+        DECLARE $plank_date AS Utf8;
 
-            not_done_query = """
-                DECLARE $plank_date AS Utf8;
+        SELECT u.name AS name
+        FROM users AS u
+        WHERE u.user_id NOT IN (
+            SELECT user_id FROM plank_records WHERE plank_date = $plank_date
+        );
+        """,
+        {"$plank_date": today},
+    )
 
-                SELECT u.name AS name
-                FROM users AS u
-                WHERE u.user_id NOT IN (
-                    SELECT user_id FROM plank_records WHERE plank_date = $plank_date
-                );
-            """
-            not_done_result = tx.execute(not_done_query, {"$plank_date": today})
+    done = []
+    for row in done_result_sets[0].rows:
+        if row.actual_seconds is not None:
+            done.append(f"{row.name} ({row.actual_seconds})")
+        else:
+            done.append(row.name)
 
-            tx.commit()
+    not_done = [row.name for row in not_done_result_sets[0].rows]
 
-            done = []
-            for row in done_result[0].rows:
-                if row.actual_seconds is not None:
-                    done.append(f"{row.name} ({row.actual_seconds})")
-                else:
-                    done.append(row.name)
-
-            not_done = [row.name for row in not_done_result[0].rows]
-
-            return done, not_done
-
-        except Exception:
-            try:
-                tx.rollback()
-            except Exception:
-                pass
-            raise
-
-    return pool.retry_operation_sync(_callee)
+    return done, not_done
