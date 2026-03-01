@@ -329,8 +329,14 @@ def process_message(msg):
     logger.warning("Processing message from peer_id=%s: %s", msg.get("peer_id"), text_raw)
 
     # Track every group chat message (best-effort — never block command handling)
+    # Use peer_id + conversation_message_id as the unique key:
+    #   - msg["id"] is 0 or unreliable for group chats
+    #   - conversation_message_id is a per-conversation sequential counter → globally
+    #     unique when combined with peer_id
     user_id = msg.get("from_id")
-    message_id = str(msg.get("id", ""))
+    peer_id_val = msg.get("peer_id", "")
+    conv_msg_id = msg.get("conversation_message_id", "")
+    message_id = f"{peer_id_val}_{conv_msg_id}" if (peer_id_val and conv_msg_id) else ""
     if user_id and message_id and text_raw:
         try:
             user_name = get_user_name(user_id)
