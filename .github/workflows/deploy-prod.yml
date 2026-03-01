@@ -1,0 +1,77 @@
+name: Deploy to Prod
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  TF_VAR_vk_group_token: ${{ secrets.VK_GROUP_TOKEN_PROD }}
+  TF_VAR_vk_confirmation_token: ${{ secrets.VK_CONFIRMATION_TOKEN_PROD }}
+  TF_VAR_vk_secret_key: ${{ secrets.VK_SECRET_KEY_PROD }}
+  TF_VAR_cloud_id: ${{ secrets.YC_CLOUD_ID }}
+  TF_VAR_folder_id: ${{ secrets.YC_FOLDER_ID_PROD }}
+  TF_VAR_environment: prod
+  TF_VAR_tfstate_bucket: plankabot-tfstate-prod
+  TF_VAR_yandex_llm_api_key: ${{ secrets.YANDEX_LLM_API_KEY_PROD }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.YC_S3_ACCESS_KEY_PROD }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.YC_S3_SECRET_KEY_PROD }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run tests
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+          pytest tests/ -v --junit-xml=test-results.xml
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: test-results.xml
+
+      - name: Write deployer SA key
+        run: |
+          mkdir -p ~/.yc
+          echo '${{ secrets.YC_SA_KEY_JSON_PROD }}' > ~/.yc/deployer-key-prod.json
+        shell: bash
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          terraform init \
+            -backend-config="bucket=plankabot-tfstate-prod" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="region=ru-central1" \
+            -backend-config="skip_region_validation=true" \
+            -backend-config="skip_credentials_validation=true" \
+            -backend-config="skip_metadata_api_check=true" \
+            -backend-config="skip_requesting_account_id=true" \
+            -backend-config="force_path_style=true" \
+            -reconfigure
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: |
+          terraform apply -auto-approve -var="sa_key_file=$HOME/.yc/deployer-key-prod.json"
+
+      - name: Print API Gateway URL
+        working-directory: terraform
+        run: terraform output api_gateway_url
