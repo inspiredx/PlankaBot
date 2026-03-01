@@ -77,19 +77,18 @@ def handle_planka(msg, text: str):
         except ValueError:
             actual_seconds = None
 
-    first_today = db.mark_plank(user_id, name, actual_seconds)
+    result = db.mark_plank(user_id, name, actual_seconds)
     today_str = db.get_today_date_str()
 
-    if first_today:
+    if result.is_new:
         if actual_seconds is not None:
             send_message(peer_id, f"{today_str} планка сделана ({actual_seconds})")
         else:
             send_message(peer_id, f"{today_str} планка сделана")
+    elif result.was_updated:
+        send_message(peer_id, f"планка обновлена ({actual_seconds}) 💪")
     else:
-        if actual_seconds is not None:
-            send_message(peer_id, f"планка уже сделана ({actual_seconds})")
-        else:
-            send_message(peer_id, "планка уже сделана")
+        send_message(peer_id, "планка уже сделана")
 
 
 def handle_stats(msg):

@@ -10,7 +10,7 @@ to be reused across warm Cloud Function invocations.
 
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import ydb
 import ydb.iam
@@ -92,18 +92,27 @@ def _get_pool() -> ydb.QuerySessionPool:
 # Public API
 # ---------------------------------------------------------------------------
 
-def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> bool:
+class PlankMarkResult(NamedTuple):
+    """Result of mark_plank."""
+    is_new: bool       # True if a new record was inserted
+    was_updated: bool  # True if an existing record's actual_seconds was updated
+
+
+def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> PlankMarkResult:
     """
     Record today's plank for user_id.
 
-    Returns True if this is the first record today (success),
-    False if the user already has a record for today (duplicate).
+    Returns PlankMarkResult:
+      - is_new=True, was_updated=False  — first plank of the day inserted
+      - is_new=False, was_updated=True  — existing record updated with new actual_seconds
+      - is_new=False, was_updated=False — already done, nothing to update
 
     Uses an explicit SerializableReadWrite transaction:
       1. Read existing user row (to preserve is_bot_admin / created_at)
       2. Upsert user (create or update name + last_activity)
       3. Check for existing plank_records row for today
-      4. If none, insert it
+      4a. If none, insert it
+      4b. If exists and actual_seconds provided, update it
     """
     pool = _get_pool()
     today = get_today_date_str()
@@ -178,10 +187,32 @@ def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> bool:
                 count = rows[0].cnt if rows else 0
 
             if count > 0:
-                tx.commit()
-                return False
+                if actual_seconds is not None:
+                    # Step 4b: Update existing record with new actual_seconds
+                    with tx.execute(
+                        """
+                        DECLARE $user_id AS Int64;
+                        DECLARE $plank_date AS Utf8;
+                        DECLARE $actual_seconds AS Int32?;
 
-            # Step 4: Insert plank record and commit
+                        UPDATE plank_records
+                        SET actual_seconds = $actual_seconds
+                        WHERE user_id = $user_id AND plank_date = $plank_date;
+                        """,
+                        {
+                            "$user_id": user_id,
+                            "$plank_date": today,
+                            "$actual_seconds": (actual_seconds, ydb.OptionalType(ydb.PrimitiveType.Int32)),
+                        },
+                        commit_tx=True,
+                    ) as _:
+                        pass
+                    return PlankMarkResult(is_new=False, was_updated=True)
+                else:
+                    tx.commit()
+                    return PlankMarkResult(is_new=False, was_updated=False)
+
+            # Step 4a: Insert plank record and commit
             with tx.execute(
                 """
                 DECLARE $user_id AS Int64;
@@ -202,7 +233,7 @@ def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> bool:
             ) as _:
                 pass
 
-            return True
+            return PlankMarkResult(is_new=True, was_updated=False)
 
         except Exception:
             try:

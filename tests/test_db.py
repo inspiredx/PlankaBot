@@ -164,7 +164,7 @@ def _count_result(cnt):
 
 class TestMarkPlankFirstToday:
     def test_returns_true_when_no_existing_record(self, db_module):
-        """mark_plank returns True when user hasn't planked today."""
+        """mark_plank returns PlankMarkResult(is_new=True) when user hasn't planked today."""
         pool = _make_mark_plank_pool([
             _no_existing_user(),   # fetch user
             [],                    # upsert user (no result)
@@ -176,10 +176,11 @@ class TestMarkPlankFirstToday:
         with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
             result = db_module.mark_plank(111, "Иван Иванов", 60)
 
-        assert result is True
+        assert result.is_new is True
+        assert result.was_updated is False
 
     def test_returns_true_for_existing_user_first_plank(self, db_module):
-        """Existing user (is_bot_admin preserved) planking first time today → True."""
+        """Existing user (is_bot_admin preserved) planking first time today → is_new=True."""
         pool = _make_mark_plank_pool([
             _existing_user(is_bot_admin=True, created_at=1000),
             [],
@@ -191,7 +192,8 @@ class TestMarkPlankFirstToday:
         with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
             result = db_module.mark_plank(111, "Иван Иванов", None)
 
-        assert result is True
+        assert result.is_new is True
+        assert result.was_updated is False
 
     def test_uses_query_serializable_read_write(self, db_module):
         """Transaction must use QuerySerializableReadWrite isolation."""
@@ -289,8 +291,8 @@ class TestMarkPlankFirstToday:
 # ---------------------------------------------------------------------------
 
 class TestMarkPlankDuplicate:
-    def test_returns_false_when_record_exists(self, db_module):
-        """mark_plank returns False when user already planked today."""
+    def test_returns_false_when_record_exists_no_seconds(self, db_module):
+        """mark_plank returns is_new=False, was_updated=False when already done and no seconds given."""
         pool = _make_mark_plank_pool([
             _no_existing_user(),
             [],
@@ -299,12 +301,13 @@ class TestMarkPlankDuplicate:
         db_module._pool = pool
 
         with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
-            result = db_module.mark_plank(111, "Иван Иванов", 60)
+            result = db_module.mark_plank(111, "Иван Иванов", None)
 
-        assert result is False
+        assert result.is_new is False
+        assert result.was_updated is False
 
-    def test_no_insert_on_duplicate(self, db_module):
-        """When duplicate detected, only 3 execute calls (no insert)."""
+    def test_no_insert_on_duplicate_no_seconds(self, db_module):
+        """When duplicate detected and no seconds given, only 3 execute calls (no insert, no update)."""
         execute_call_count = [0]
 
         @contextmanager
@@ -326,16 +329,12 @@ class TestMarkPlankDuplicate:
         db_module._pool = pool
 
         with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
-            db_module.mark_plank(111, "Иван Иванов", 60)
+            db_module.mark_plank(111, "Иван Иванов", None)
 
         assert execute_call_count[0] == 3
 
-    def test_commit_called_on_duplicate(self, db_module):
-        """tx.commit() is called explicitly when duplicate is detected."""
-        pool = _make_mark_plank_pool([
-            _no_existing_user(), [], _count_result(1),
-        ])
-
+    def test_commit_called_on_duplicate_no_seconds(self, db_module):
+        """tx.commit() is called explicitly when duplicate detected and no seconds given."""
         committed = [False]
 
         def _retry(callee):
@@ -357,9 +356,117 @@ class TestMarkPlankDuplicate:
         db_module._pool = pool
 
         with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
-            db_module.mark_plank(111, "Иван Иванов", 60)
+            db_module.mark_plank(111, "Иван Иванов", None)  # no seconds → explicit tx.commit()
 
         assert committed[0] is True
+
+
+# ---------------------------------------------------------------------------
+# mark_plank — update (already done, new seconds provided)
+# ---------------------------------------------------------------------------
+
+class TestMarkPlankUpdate:
+    def test_returns_was_updated_true_when_record_exists_with_seconds(self, db_module):
+        """mark_plank returns was_updated=True when already done and new seconds given."""
+        pool = _make_mark_plank_pool([
+            _no_existing_user(),
+            [],
+            _count_result(1),   # count=1 → duplicate
+            [],                  # update query
+        ])
+        db_module._pool = pool
+
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            result = db_module.mark_plank(111, "Иван Иванов", 120)
+
+        assert result.is_new is False
+        assert result.was_updated is True
+
+    def test_four_execute_calls_on_update(self, db_module):
+        """When updating, 4 execute calls: fetch user, upsert user, check count, update."""
+        execute_call_count = [0]
+
+        @contextmanager
+        def _counting_execute(query, params=None, commit_tx=False):
+            idx = execute_call_count[0]
+            execute_call_count[0] += 1
+            results = [_no_existing_user(), [], _count_result(1), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _counting_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            db_module.mark_plank(111, "Иван Иванов", 120)
+
+        assert execute_call_count[0] == 4
+
+    def test_update_passes_correct_seconds(self, db_module):
+        """The update execute call receives the new actual_seconds value."""
+        captured_params = []
+
+        @contextmanager
+        def _capturing_execute(query, params=None, commit_tx=False):
+            captured_params.append(params or {})
+            idx = len(captured_params) - 1
+            results = [_no_existing_user(), [], _count_result(1), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _capturing_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            db_module.mark_plank(111, "Иван Иванов", 120)
+
+        # 4th call (index 3) is the UPDATE
+        update_params = captured_params[3]
+        assert "$actual_seconds" in update_params
+        # actual_seconds is passed as a tuple (value, type)
+        assert update_params["$actual_seconds"][0] == 120
+
+    def test_update_commit_tx_true(self, db_module):
+        """The update execute call uses commit_tx=True."""
+        commit_tx_values = []
+
+        @contextmanager
+        def _tracking_execute(query, params=None, commit_tx=False):
+            commit_tx_values.append(commit_tx)
+            idx = len(commit_tx_values) - 1
+            results = [_no_existing_user(), [], _count_result(1), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _tracking_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            db_module.mark_plank(111, "Иван Иванов", 120)
+
+        # First 3: False, False, False; 4th (update): True
+        assert commit_tx_values == [False, False, False, True]
 
 
 # ---------------------------------------------------------------------------

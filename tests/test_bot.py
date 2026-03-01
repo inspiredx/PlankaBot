@@ -254,10 +254,19 @@ class TestHandleStats:
 # ---------------------------------------------------------------------------
 
 class TestHandlePlanka:
+    def _new_result(self, db_module):
+        return db_module.PlankMarkResult(is_new=True, was_updated=False)
+
+    def _dup_result(self, db_module):
+        return db_module.PlankMarkResult(is_new=False, was_updated=False)
+
+    def _updated_result(self, db_module):
+        return db_module.PlankMarkResult(is_new=False, was_updated=True)
+
     def test_planka_no_value_first_today(self, bot_module, db_module):
         """First plank of the day without value → success message."""
         msg = make_msg("планка")
-        with patch.object(db_module, "mark_plank", return_value=True), \
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)), \
              patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
              patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
              patch.object(bot_module, "send_message") as mock_send:
@@ -270,7 +279,7 @@ class TestHandlePlanka:
     def test_planka_with_value_first_today(self, bot_module, db_module):
         """First plank of the day with value → success message with seconds."""
         msg = make_msg("планка 60")
-        with patch.object(db_module, "mark_plank", return_value=True) as mock_mark, \
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)) as mock_mark, \
              patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
              patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
              patch.object(bot_module, "send_message") as mock_send:
@@ -278,13 +287,12 @@ class TestHandlePlanka:
         text = mock_send.call_args[0][1]
         assert "планка сделана" in text
         assert "(60)" in text
-        # Verify actual_seconds=60 passed to db
         mock_mark.assert_called_once_with(111, "Иван Иванов", 60)
 
     def test_planka_duplicate_no_value(self, bot_module, db_module):
-        """Already planked today without value → 'уже сделана'."""
+        """Already planked today, no new value → 'уже сделана' (no seconds shown)."""
         msg = make_msg("планка")
-        with patch.object(db_module, "mark_plank", return_value=False), \
+        with patch.object(db_module, "mark_plank", return_value=self._dup_result(db_module)), \
              patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
              patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
              patch.object(bot_module, "send_message") as mock_send:
@@ -293,22 +301,44 @@ class TestHandlePlanka:
         assert "уже сделана" in text
         assert "(" not in text
 
-    def test_planka_duplicate_with_value(self, bot_module, db_module):
-        """Already planked today with value → 'уже сделана (60)'."""
+    def test_planka_duplicate_no_value_does_not_show_stale_seconds(self, bot_module, db_module):
+        """Sending 'планка' when already done shows no seconds (doesn't echo stale DB value)."""
+        msg = make_msg("планка")
+        with patch.object(db_module, "mark_plank", return_value=self._dup_result(db_module)), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_planka(msg, "планка")
+        text = mock_send.call_args[0][1]
+        assert "(" not in text
+
+    def test_planka_update_with_seconds(self, bot_module, db_module):
+        """Already done, new seconds provided → record updated, message says 'обновлена'."""
+        msg = make_msg("планка 120")
+        with patch.object(db_module, "mark_plank", return_value=self._updated_result(db_module)), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_planka(msg, "планка 120")
+        text = mock_send.call_args[0][1]
+        assert "обновлена" in text
+        assert "(120)" in text
+
+    def test_planka_update_message_does_not_say_already_done(self, bot_module, db_module):
+        """Updated plank message must NOT say 'уже сделана'."""
         msg = make_msg("планка 60")
-        with patch.object(db_module, "mark_plank", return_value=False), \
+        with patch.object(db_module, "mark_plank", return_value=self._updated_result(db_module)), \
              patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
              patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
              patch.object(bot_module, "send_message") as mock_send:
             bot_module.handle_planka(msg, "планка 60")
         text = mock_send.call_args[0][1]
-        assert "уже сделана" in text
-        assert "(60)" in text
+        assert "уже сделана" not in text
 
     def test_planka_non_numeric_value_treated_as_no_value(self, bot_module, db_module):
         """Non-numeric second word: actual_seconds passed as None."""
         msg = make_msg("планка abc")
-        with patch.object(db_module, "mark_plank", return_value=True) as mock_mark, \
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)) as mock_mark, \
              patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
              patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
              patch.object(bot_module, "send_message"):
@@ -318,7 +348,7 @@ class TestHandlePlanka:
     def test_planka_passes_user_id_and_name(self, bot_module, db_module):
         """user_id and name are correctly passed to db.mark_plank."""
         msg = make_msg("планка", from_id=999)
-        with patch.object(db_module, "mark_plank", return_value=True) as mock_mark, \
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)) as mock_mark, \
              patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
              patch.object(bot_module, "get_user_name", return_value="Тест Пользователь"), \
              patch.object(bot_module, "send_message"):
