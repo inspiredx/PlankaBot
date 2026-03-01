@@ -22,8 +22,8 @@ def set_env(monkeypatch):
     monkeypatch.setenv("VK_CONFIRMATION_TOKEN", "test_confirmation_token")
     monkeypatch.setenv("YANDEX_FOLDER_ID", "test_folder_id")
     monkeypatch.setenv("YANDEX_LLM_API_KEY", "test_llm_api_key")
-    monkeypatch.setenv("YDB_ENDPOINT", "grpcs://localhost:2135")
-    monkeypatch.setenv("YDB_DATABASE", "/local")
+    monkeypatch.delenv("YDB_ENDPOINT", raising=False)
+    monkeypatch.delenv("YDB_DATABASE", raising=False)
     monkeypatch.setenv("PLANK_TIMEZONE", "Europe/Moscow")
 
 

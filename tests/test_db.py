@@ -16,8 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 @pytest.fixture(autouse=True)
 def set_env(monkeypatch):
-    monkeypatch.setenv("YDB_ENDPOINT", "grpcs://localhost:2135")
-    monkeypatch.setenv("YDB_DATABASE", "/local")
+    monkeypatch.delenv("YDB_ENDPOINT", raising=False)
+    monkeypatch.delenv("YDB_DATABASE", raising=False)
     monkeypatch.setenv("VK_GROUP_TOKEN", "test")
     monkeypatch.setenv("VK_CONFIRMATION_TOKEN", "test")
     monkeypatch.setenv("PLANK_TIMEZONE", "Europe/Moscow")

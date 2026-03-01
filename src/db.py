@@ -2,8 +2,8 @@
 YDB database layer for PlankaBot.
 
 All writes use explicit SerializableReadWrite transactions (begin → ops → commit).
-The driver and session pool are initialized once at module level to survive
-warm Cloud Function invocations.
+The driver and session pool are initialized once at module level during cold start
+to be reused across warm Cloud Function invocations (same as the official YDB tutorial).
 """
 
 import logging
@@ -44,32 +44,45 @@ def get_today_date_str() -> str:
 
 
 # ---------------------------------------------------------------------------
-# YDB driver / session pool — initialized once at module level
+# YDB driver / session pool — initialized once at module level (cold start).
+# Reused across warm invocations. Tests override _pool directly.
+#
+# The YDB Python SDK requires the endpoint with the grpcs:// scheme prefix.
+# Yandex Cloud may expose the endpoint as either "grpcs://host:port" or just
+# "host:port" depending on the attribute used — normalize defensively.
 # ---------------------------------------------------------------------------
 
-def _build_driver() -> ydb.Driver:
-    credentials = ydb.iam.MetadataUrlCredentials()
-    driver_config = ydb.DriverConfig(
-        endpoint=YDB_ENDPOINT,
-        database=YDB_DATABASE,
-        credentials=credentials,
-    )
-    driver = ydb.Driver(driver_config)
-    driver.wait(fail_fast=True, timeout=5)
-    return driver
+def _normalize_endpoint(endpoint: str) -> str:
+    if endpoint and not endpoint.startswith("grpcs://") and not endpoint.startswith("grpc://"):
+        return f"grpcs://{endpoint}"
+    return endpoint
 
 
-# Module-level singletons — populated on first real usage.
-# Tests replace these with mocks before calling db functions.
+# Module-level singletons. Tests replace _pool with a mock before calling db functions.
 _driver: Optional[ydb.Driver] = None
 _pool: Optional[ydb.SessionPool] = None
 
+if YDB_ENDPOINT and YDB_DATABASE:
+    try:
+        _endpoint = _normalize_endpoint(YDB_ENDPOINT)
+        logger.info("Initializing YDB driver: endpoint=%s database=%s", _endpoint, YDB_DATABASE)
+        _driver = ydb.Driver(
+            endpoint=_endpoint,
+            database=YDB_DATABASE,
+            credentials=ydb.iam.MetadataUrlCredentials(),
+        )
+        _driver.wait(fail_fast=True, timeout=5)
+        _pool = ydb.SessionPool(_driver)
+        logger.info("YDB session pool ready")
+    except Exception as _exc:
+        logger.error("Failed to initialize YDB driver at module load: %s", _exc)
+        _driver = None
+        _pool = None
+
 
 def _get_pool() -> ydb.SessionPool:
-    global _driver, _pool
     if _pool is None:
-        _driver = _build_driver()
-        _pool = ydb.SessionPool(_driver)
+        raise RuntimeError("YDB session pool is not initialized. Check YDB_ENDPOINT and YDB_DATABASE env vars.")
     return _pool
 
 
