@@ -422,6 +422,7 @@ class TestProcessMessageTracking:
         mock_save.assert_not_called()
 
     @pytest.mark.parametrize("command", [
+        # Lowercase — canonical forms
         "планка",
         "планка 60",
         "стата",
@@ -429,9 +430,27 @@ class TestProcessMessageTracking:
         "ебать гусей",
         "ебать гусей причмокивая",
         "кто сегодня самый красивый",
+        "объясни",
+        "объясни по-пацански",
+        # Mixed / upper case — verifies exclusion is case-insensitive
+        "Планка",
+        "Планка 60",
+        "ПЛАНКА",
+        "ПЛАНКА 120",
+        "Стата",
+        "СТАТА",
+        "Гайд",
+        "ГАЙД",
+        "Ебать Гусей",
+        "ЕБАТЬ ГУСЕЙ",
+        "Ебать Гусей причмокивая",
+        "Кто Сегодня самый красивый",
+        "КТО СЕГОДНЯ самый красивый",
+        "Объясни по-пацански",
+        "ОБЪЯСНИ КАК ШЕКСПИР",
     ])
     def test_does_not_save_any_bot_command(self, bot_module, db_module, command):
-        """All bot commands are excluded from chat_messages tracking."""
+        """All bot commands are excluded from chat_messages tracking, case-insensitively."""
         msg = make_msg(command, peer_id=2000000001, from_id=111)
         msg["conversation_message_id"] = 200
         with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
@@ -440,7 +459,8 @@ class TestProcessMessageTracking:
              patch.object(bot_module, "handle_stats"), \
              patch.object(bot_module, "handle_guide"), \
              patch.object(bot_module, "handle_geese"), \
-             patch.object(bot_module, "handle_who_is_today"):
+             patch.object(bot_module, "handle_who_is_today"), \
+             patch.object(bot_module, "handle_explain"):
             bot_module.process_message(msg)
         mock_save.assert_not_called()
 
