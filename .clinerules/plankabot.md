@@ -46,7 +46,7 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - No secondary index: at most ~2,000 rows at any time; full scan is trivially fast
 
 ## Key Design Decisions — `кто сегодня`
-- **Message tracking**: every incoming group chat message is saved to `chat_messages` via `db.save_message()` in `process_message()`, before command routing. Best-effort: exceptions are logged and never block the bot response.
+- **Message tracking**: every incoming group chat message is saved to `chat_messages` via `db.save_message()` in `process_message()`, before command routing. **Bot commands are excluded** (`планка`, `стата`, `гайд`, `ебать гусей`, `кто сегодня`) — only organic free-form chat content is stored. Best-effort: exceptions are logged and never block the bot response.
 - **Token economy**: `_build_who_is_today_input()` divides a fixed char budget (~93,000 chars ≈ 31,000 tokens) equally among N users. Within each user's share, newest messages are kept first (reversed iteration) so fresh context survives trimming when a user has many messages.
 - **Prompt**: `src/prompts/who_is_today_prompt.txt` — Russian-language judge prompt; picks exactly one winner by name with ironic explanation. General enough for any context question.
 - **No context → hint**: if `кто сегодня` is sent without a question, a usage hint is returned immediately without hitting the DB or LLM.
@@ -111,6 +111,8 @@ terraform/
 - **Update this cline rule** whenever new commands are added, data schema changes, new env vars are introduced, or the deployment process changes.
 - Keep the command list, data architecture, and env var table in sync with the actual code.
 - **Keep `README.md` up to date**: update the README whenever env vars, commands, deployment steps, or setup instructions change.
+- **Keep the in-bot guide up to date**: update `handle_guide()` in `src/bot.py` whenever commands are added, removed, or their syntax changes.
+- **All three must be updated together** when bot commands change: `.clinerules/plankabot.md`, `README.md`, and `handle_guide()` in `src/bot.py`.
 
 ## General rules 
 - **Non-Invasive Changes**: Avoid breaking changes or massive refactorings when implementing small features or fixes.

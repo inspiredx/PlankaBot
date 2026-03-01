@@ -242,6 +242,8 @@ These environment variables are set on the deployed Yandex Cloud Function:
 | `YDB_DATABASE`         | YDB database path (`/ru-central1/...`) — auto-wired from Terraform | Yes |
 | `PLANK_TIMEZONE`       | IANA timezone for day boundary calculation (default: `Europe/Moscow`) | No |
 
+> **Note:** The `chat_messages` YDB table (used by `кто сегодня`) is provisioned automatically by Terraform — no extra setup needed. Only organic free-form chat messages are stored; all bot commands are excluded from tracking automatically.
+
 For local Terraform runs, secrets can also be passed as `TF_VAR_*` variables
 to avoid writing them to `.tfvars` files:
 
