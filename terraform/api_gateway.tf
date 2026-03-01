@@ -1,6 +1,7 @@
 resource "yandex_logging_group" "plankabot_gw" {
-  name      = "${var.function_name}-gw-logs-${var.environment}"
-  folder_id = var.folder_id
+  name             = "${var.function_name}-gw-logs-${var.environment}"
+  folder_id        = var.folder_id
+  retention_period = "24h"
 }
 
 resource "yandex_api_gateway" "plankabot" {

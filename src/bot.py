@@ -97,7 +97,7 @@ def _get_vk():
 
 
 def send_message(peer_id, text):
-    logger.warning("Sending message to peer_id=%s: %s", peer_id, text)
+    logger.info("Sending message to peer_id=%s: %s", peer_id, text.replace('\n', ' '))
     _get_vk().messages.send(
         peer_id=peer_id,
         random_id=get_random_id(),
@@ -301,7 +301,7 @@ def handle_explain(msg, text_raw: str):
     if not style:
         style = random.choice(DEFAULT_EXPLAIN_STYLES)
 
-    logger.warning("handle_explain: style=%r source_text=%r", style, source_text[:80])
+    logger.info("handle_explain: style=%r source_text=%r", style, source_text[:80])
 
     # Step 3 — send placeholder, then call LLM
     send_message(peer_id, random.choice(EXPLAIN_PLACEHOLDER_MESSAGES))
@@ -356,7 +356,7 @@ def handle_geese(msg, text_raw: str):
     else:
         extra_context = ""
 
-    logger.warning("handle_geese: extra_context=%r", extra_context)
+    logger.info("handle_geese: extra_context=%r", extra_context)
 
     # Step 3 — call LLM and send story
     try:
@@ -394,7 +394,7 @@ def handle_who_is_today(msg, text_raw: str):
         send_message(peer_id, "Укажи вопрос. Например: кто сегодня больше всех похож на Цоя?")
         return
 
-    logger.warning("handle_who_is_today: question=%r", question)
+    logger.info("handle_who_is_today: question=%r", question)
 
     # Step 2 — send placeholder
     send_message(peer_id, random.choice(WHO_IS_TODAY_PLACEHOLDER_MESSAGES))
@@ -427,7 +427,7 @@ def process_message(msg):
         logger.warning("Ignoring private message from peer_id=%s", msg.get("peer_id"))
         return
 
-    logger.warning("Processing message from peer_id=%s: %s", msg.get("peer_id"), text_raw)
+    logger.info("Processing message from peer_id=%s: %s", msg.get("peer_id"), text_raw)
 
     # Track every group chat message (best-effort — never block command handling)
     # Use peer_id + conversation_message_id as the unique key:

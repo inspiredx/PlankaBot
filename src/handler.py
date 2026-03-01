@@ -38,8 +38,6 @@ def handler(event, context):
         return {"statusCode": 403, "body": "Forbidden"}
 
     event_type = data.get("type")
-    logger.warning("Received VK event type: %s", event_type)
-
     if event_type == "confirmation":
         return {"statusCode": 200, "body": VK_CONFIRMATION_TOKEN}
 

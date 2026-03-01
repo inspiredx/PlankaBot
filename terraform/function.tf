@@ -40,8 +40,9 @@ data "archive_file" "function_zip" {
 }
 
 resource "yandex_logging_group" "plankabot" {
-  name      = "${var.function_name}-logs-${var.environment}"
-  folder_id = var.folder_id
+  name             = "${var.function_name}-logs-${var.environment}"
+  folder_id        = var.folder_id
+  retention_period = "24h"
 }
 
 resource "yandex_iam_service_account" "invoker" {
@@ -85,6 +86,6 @@ resource "yandex_function" "plankabot" {
 
   log_options {
     log_group_id = yandex_logging_group.plankabot.id
-    min_level    = "LEVEL_UNSPECIFIED"
+    min_level    = "INFO"
   }
 }
