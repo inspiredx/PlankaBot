@@ -22,6 +22,10 @@ data "archive_file" "function_zip" {
     filename = "config.py"
   }
   source {
+    content  = file("${local.repo_root}/src/db.py")
+    filename = "db.py"
+  }
+  source {
     content  = file("${local.repo_root}/requirements.txt")
     filename = "requirements.txt"
   }
@@ -56,6 +60,7 @@ resource "yandex_function" "plankabot" {
   execution_timeout  = "10"
   concurrency        = 3
   folder_id          = var.folder_id
+  service_account_id = yandex_iam_service_account.function_runtime.id
 
   user_hash = data.archive_file.function_zip.output_sha256
 
@@ -66,8 +71,12 @@ resource "yandex_function" "plankabot" {
   environment = {
     VK_GROUP_TOKEN        = var.vk_group_token
     VK_CONFIRMATION_TOKEN = var.vk_confirmation_token
+    VK_SECRET_KEY         = var.vk_secret_key
     YANDEX_FOLDER_ID      = var.folder_id
     YANDEX_LLM_API_KEY    = var.yandex_llm_api_key
+    YDB_ENDPOINT          = yandex_ydb_database_serverless.plankabot.ydb_api_endpoint
+    YDB_DATABASE          = yandex_ydb_database_serverless.plankabot.database_path
+    PLANK_TIMEZONE        = var.plank_timezone
   }
 
   log_options {

@@ -196,6 +196,7 @@ Add these in **Settings → Secrets and variables → Actions**:
 | `YC_S3_SECRET_KEY_DEV`      | Static secret key for S3 backend (dev)                                         |
 | `VK_GROUP_TOKEN_DEV`        | VK group API token                                                             |
 | `VK_CONFIRMATION_TOKEN_DEV` | VK callback confirmation token                                                 |
+| `VK_SECRET_KEY_DEV`         | VK Callback API secret key (set in VK group settings → Callback API → Secret key) |
 | `YANDEX_LLM_API_KEY_DEV`    | API key for `plankabot-llm-dev` SA (created manually — see post-deploy steps)  |
 
 > **Prod note:** when a prod workflow is added, mirror the above with `_PROD` suffixes and `YANDEX_LLM_API_KEY_PROD`.
@@ -234,8 +235,12 @@ These environment variables are set on the deployed Yandex Cloud Function:
 |------------------------|--------------------------------------------------|----------|
 | `VK_GROUP_TOKEN`       | VK group API token (for sending messages)        | Yes      |
 | `VK_CONFIRMATION_TOKEN`| VK confirmation string for callback verification | Yes      |
+| `VK_SECRET_KEY`        | VK Callback API secret key; requests with a non-matching `secret` field are rejected with 403. Set in VK group settings → Callback API → Secret key (up to 50 alphanumeric chars). | Yes |
 | `YANDEX_FOLDER_ID`     | Yandex Cloud folder ID (injected from `folder_id` tfvar) | Yes |
 | `YANDEX_LLM_API_KEY`   | API key for the LLM service account             | Yes      |
+| `YDB_ENDPOINT`         | YDB API endpoint (`grpcs://...`) — auto-wired from Terraform | Yes |
+| `YDB_DATABASE`         | YDB database path (`/ru-central1/...`) — auto-wired from Terraform | Yes |
+| `PLANK_TIMEZONE`       | IANA timezone for day boundary calculation (default: `Europe/Moscow`) | No |
 
 For local Terraform runs, secrets can also be passed as `TF_VAR_*` variables
 to avoid writing them to `.tfvars` files:
@@ -243,6 +248,7 @@ to avoid writing them to `.tfvars` files:
 ```bash
 export TF_VAR_vk_group_token="your_token"
 export TF_VAR_vk_confirmation_token="your_confirmation"
+export TF_VAR_vk_secret_key="your_secret_key"
 ```
 
 ---
@@ -270,6 +276,7 @@ pytest tests/ -v
    - Set the **server URL** to the output URL (e.g. `https://<id>.apigw.yandexcloud.net/`)
    - Click **Confirm** — VK will send a `confirmation` event; the function will respond with `VK_CONFIRMATION_TOKEN`
 3. Enable the `message_new` event type in the same section.
+4. Set a **Secret key** in the same section (up to 50 alphanumeric characters). Copy the value and set it as `VK_SECRET_KEY_DEV` in GitHub Secrets (or `TF_VAR_vk_secret_key` for local deploys). The function will reject any request where the `secret` field doesn't match.
 
 ---
 
@@ -280,17 +287,20 @@ PlankaBot/
 ├── src/
 │   ├── handler.py          # Yandex Cloud Function entry point
 │   ├── bot.py              # VK bot logic (message routing, responses)
+│   ├── db.py               # YDB driver, session pool, all DB operations
 │   ├── config.py           # Configuration from environment variables
 │   └── prompts/
 │       └── geese_story_prompt.txt  # System prompt for the LLM geese story
 ├── tests/
 │   ├── test_handler.py     # Handler unit tests
-│   └── test_bot.py         # Bot logic unit tests
+│   ├── test_bot.py         # Bot logic unit tests
+│   └── test_db.py          # YDB layer unit tests (mocked)
 ├── terraform/
 │   ├── main.tf             # Provider + S3 backend config
 │   ├── variables.tf        # Input variables
 │   ├── function.tf         # Yandex Cloud Function resource
-│   ├── iam.tf              # LLM service account + IAM role binding
+│   ├── iam.tf              # Service accounts + IAM role bindings
+│   ├── ydb.tf              # YDB serverless DB + users/plank_records tables
 │   ├── api_gateway.tf      # Yandex API Gateway resource
 │   ├── outputs.tf          # Output values
 │   └── environments/

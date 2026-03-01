@@ -1,7 +1,7 @@
 import sys
 import os
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 # Make src/ importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -20,8 +20,12 @@ def mock_vk_session():
 def set_env(monkeypatch):
     monkeypatch.setenv("VK_GROUP_TOKEN", "test_group_token")
     monkeypatch.setenv("VK_CONFIRMATION_TOKEN", "test_confirmation_token")
+    monkeypatch.setenv("VK_SECRET_KEY", "test_secret_key")
     monkeypatch.setenv("YANDEX_FOLDER_ID", "test_folder_id")
     monkeypatch.setenv("YANDEX_LLM_API_KEY", "test_llm_api_key")
+    monkeypatch.delenv("YDB_ENDPOINT", raising=False)
+    monkeypatch.delenv("YDB_DATABASE", raising=False)
+    monkeypatch.setenv("PLANK_TIMEZONE", "Europe/Moscow")
 
 
 @pytest.fixture()
@@ -29,14 +33,27 @@ def bot_module():
     import importlib
     import config
     importlib.reload(config)
+    import db
+    importlib.reload(db)
     import bot
     importlib.reload(bot)
     return bot
 
 
+@pytest.fixture()
+def db_module(bot_module):
+    """Return the db module as imported by bot (same reload cycle)."""
+    import db
+    return db
+
+
 def make_msg(text: str, peer_id: int = 2000000001, from_id: int = 111):
     return {"text": text, "peer_id": peer_id, "from_id": from_id}
 
+
+# ---------------------------------------------------------------------------
+# Routing
+# ---------------------------------------------------------------------------
 
 class TestProcessMessageRouting:
     def test_ignores_private_messages(self, bot_module):
@@ -87,6 +104,10 @@ class TestProcessMessageRouting:
         mock_send.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# handle_guide
+# ---------------------------------------------------------------------------
+
 class TestHandleGuide:
     def test_sends_guide_text(self, bot_module):
         msg = make_msg("гайд")
@@ -98,6 +119,10 @@ class TestHandleGuide:
         assert "планка" in args[1]
         assert "стата" in args[1]
 
+
+# ---------------------------------------------------------------------------
+# handle_geese
+# ---------------------------------------------------------------------------
 
 class TestHandleGeese:
     def test_placeholder_messages_list_has_10_entries(self, bot_module):
@@ -183,30 +208,150 @@ class TestHandleGeese:
         mock_llm.assert_called_once_with("ГРОМКО")
 
 
+# ---------------------------------------------------------------------------
+# handle_stats
+# ---------------------------------------------------------------------------
+
 class TestHandleStats:
-    def test_stats_returns_unavailable(self, bot_module):
+    def test_stats_nobody_done(self, bot_module, db_module):
+        """When nobody planked today, response says 'никто'."""
         msg = make_msg("стата")
-        with patch.object(bot_module, "send_message") as mock_send:
+        with patch.object(db_module, "get_stats_for_today", return_value=([], [])), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "send_message") as mock_send:
             bot_module.handle_stats(msg)
         mock_send.assert_called_once()
-        assert "недоступна" in mock_send.call_args[0][1]
+        text = mock_send.call_args[0][1]
+        assert "2026-03-01" in text
+        assert "никто" in text
 
+    def test_stats_done_and_not_done(self, bot_module, db_module):
+        """Shows both done and not-done lists."""
+        msg = make_msg("стата")
+        done = ["Иван Иванов (60)", "Мария Смирнова"]
+        not_done = ["Пётр Петров"]
+        with patch.object(db_module, "get_stats_for_today", return_value=(done, not_done)), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_stats(msg)
+        text = mock_send.call_args[0][1]
+        assert "Иван Иванов (60)" in text
+        assert "Мария Смирнова" in text
+        assert "Пётр Петров" in text
+
+    def test_stats_all_done(self, bot_module, db_module):
+        """When not_done is empty, message says everyone is done."""
+        msg = make_msg("стата")
+        with patch.object(db_module, "get_stats_for_today", return_value=(["Иван Иванов"], [])), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_stats(msg)
+        text = mock_send.call_args[0][1]
+        assert "Все отметились" in text
+
+
+# ---------------------------------------------------------------------------
+# handle_planka
+# ---------------------------------------------------------------------------
 
 class TestHandlePlanka:
-    def test_planka_no_value(self, bot_module):
+    def _new_result(self, db_module):
+        return db_module.PlankMarkResult(is_new=True, was_updated=False)
+
+    def _dup_result(self, db_module):
+        return db_module.PlankMarkResult(is_new=False, was_updated=False)
+
+    def _updated_result(self, db_module):
+        return db_module.PlankMarkResult(is_new=False, was_updated=True)
+
+    def test_planka_no_value_first_today(self, bot_module, db_module):
+        """First plank of the day without value → success message."""
         msg = make_msg("планка")
-        with patch.object(bot_module, "send_message") as mock_send:
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
             bot_module.handle_planka(msg, "планка")
-        mock_send.assert_called_once()
         text = mock_send.call_args[0][1]
         assert "планка сделана" in text
         assert "(" not in text
+        assert "2026-03-01" in text
 
-    def test_planka_with_value(self, bot_module):
+    def test_planka_with_value_first_today(self, bot_module, db_module):
+        """First plank of the day with value → success message with seconds."""
         msg = make_msg("планка 60")
-        with patch.object(bot_module, "send_message") as mock_send:
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)) as mock_mark, \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
             bot_module.handle_planka(msg, "планка 60")
-        mock_send.assert_called_once()
         text = mock_send.call_args[0][1]
         assert "планка сделана" in text
         assert "(60)" in text
+        mock_mark.assert_called_once_with(111, "Иван Иванов", 60)
+
+    def test_planka_duplicate_no_value(self, bot_module, db_module):
+        """Already planked today, no new value → 'уже сделана' (no seconds shown)."""
+        msg = make_msg("планка")
+        with patch.object(db_module, "mark_plank", return_value=self._dup_result(db_module)), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_planka(msg, "планка")
+        text = mock_send.call_args[0][1]
+        assert "уже сделана" in text
+        assert "(" not in text
+
+    def test_planka_duplicate_no_value_does_not_show_stale_seconds(self, bot_module, db_module):
+        """Sending 'планка' when already done shows no seconds (doesn't echo stale DB value)."""
+        msg = make_msg("планка")
+        with patch.object(db_module, "mark_plank", return_value=self._dup_result(db_module)), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_planka(msg, "планка")
+        text = mock_send.call_args[0][1]
+        assert "(" not in text
+
+    def test_planka_update_with_seconds(self, bot_module, db_module):
+        """Already done, new seconds provided → record updated, message says 'обновлена'."""
+        msg = make_msg("планка 120")
+        with patch.object(db_module, "mark_plank", return_value=self._updated_result(db_module)), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_planka(msg, "планка 120")
+        text = mock_send.call_args[0][1]
+        assert "обновлена" in text
+        assert "(120)" in text
+
+    def test_planka_update_message_does_not_say_already_done(self, bot_module, db_module):
+        """Updated plank message must NOT say 'уже сделана'."""
+        msg = make_msg("планка 60")
+        with patch.object(db_module, "mark_plank", return_value=self._updated_result(db_module)), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_planka(msg, "планка 60")
+        text = mock_send.call_args[0][1]
+        assert "уже сделана" not in text
+
+    def test_planka_non_numeric_value_treated_as_no_value(self, bot_module, db_module):
+        """Non-numeric second word: actual_seconds passed as None."""
+        msg = make_msg("планка abc")
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)) as mock_mark, \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_planka(msg, "планка abc")
+        mock_mark.assert_called_once_with(111, "Иван Иванов", None)
+
+    def test_planka_passes_user_id_and_name(self, bot_module, db_module):
+        """user_id and name are correctly passed to db.mark_plank."""
+        msg = make_msg("планка", from_id=999)
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)) as mock_mark, \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Тест Пользователь"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_planka(msg, "планка")
+        mock_mark.assert_called_once_with(999, "Тест Пользователь", None)

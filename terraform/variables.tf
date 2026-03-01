@@ -31,6 +31,12 @@ variable "vk_confirmation_token" {
   sensitive   = true
 }
 
+variable "vk_secret_key" {
+  description = "VK Callback API secret key for request validation (set in VK group settings → Callback API → Secret key)"
+  type        = string
+  sensitive   = true
+}
+
 variable "tfstate_bucket" {
   description = "Object Storage bucket name used for Terraform state"
   type        = string
@@ -40,4 +46,10 @@ variable "yandex_llm_api_key" {
   description = "API key for the plankabot-llm-<env> service account (created manually in YC Console)"
   type        = string
   sensitive   = true
+}
+
+variable "plank_timezone" {
+  description = "IANA timezone for day boundary calculation (e.g. Europe/Moscow)"
+  type        = string
+  default     = "Europe/Moscow"
 }
