@@ -41,3 +41,9 @@ variable "yandex_llm_api_key" {
   type        = string
   sensitive   = true
 }
+
+variable "plank_timezone" {
+  description = "IANA timezone for day boundary calculation (e.g. Europe/Moscow)"
+  type        = string
+  default     = "Europe/Moscow"
+}

@@ -1,6 +1,6 @@
 # Prod environment — fill in your actual values
-cloud_id   = "REPLACE_WITH_CLOUD_ID"
-folder_id  = "REPLACE_WITH_PROD_FOLDER_ID"
+cloud_id    = "REPLACE_WITH_CLOUD_ID"
+folder_id   = "REPLACE_WITH_PROD_FOLDER_ID"
 environment = "prod"
 
 # Path to the deployer SA authorized key JSON (local deployments only)
@@ -16,3 +16,6 @@ vk_confirmation_token = "REPLACE_WITH_VK_CONFIRMATION_TOKEN"
 # Yandex AI Studio API key for the plankabot-llm-prod service account.
 # Created manually in YC Console after first terraform apply — see README "Post-deploy checklist".
 yandex_llm_api_key = "REPLACE_WITH_LLM_API_KEY"
+
+# IANA timezone for day boundary calculation (default: Europe/Moscow = UTC+3)
+# plank_timezone = "Europe/Moscow"

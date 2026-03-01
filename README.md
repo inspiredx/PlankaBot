@@ -236,6 +236,9 @@ These environment variables are set on the deployed Yandex Cloud Function:
 | `VK_CONFIRMATION_TOKEN`| VK confirmation string for callback verification | Yes      |
 | `YANDEX_FOLDER_ID`     | Yandex Cloud folder ID (injected from `folder_id` tfvar) | Yes |
 | `YANDEX_LLM_API_KEY`   | API key for the LLM service account             | Yes      |
+| `YDB_ENDPOINT`         | YDB API endpoint (`grpcs://...`) — auto-wired from Terraform | Yes |
+| `YDB_DATABASE`         | YDB database path (`/ru-central1/...`) — auto-wired from Terraform | Yes |
+| `PLANK_TIMEZONE`       | IANA timezone for day boundary calculation (default: `Europe/Moscow`) | No |
 
 For local Terraform runs, secrets can also be passed as `TF_VAR_*` variables
 to avoid writing them to `.tfvars` files:
@@ -280,17 +283,20 @@ PlankaBot/
 ├── src/
 │   ├── handler.py          # Yandex Cloud Function entry point
 │   ├── bot.py              # VK bot logic (message routing, responses)
+│   ├── db.py               # YDB driver, session pool, all DB operations
 │   ├── config.py           # Configuration from environment variables
 │   └── prompts/
 │       └── geese_story_prompt.txt  # System prompt for the LLM geese story
 ├── tests/
 │   ├── test_handler.py     # Handler unit tests
-│   └── test_bot.py         # Bot logic unit tests
+│   ├── test_bot.py         # Bot logic unit tests
+│   └── test_db.py          # YDB layer unit tests (mocked)
 ├── terraform/
 │   ├── main.tf             # Provider + S3 backend config
 │   ├── variables.tf        # Input variables
 │   ├── function.tf         # Yandex Cloud Function resource
-│   ├── iam.tf              # LLM service account + IAM role binding
+│   ├── iam.tf              # Service accounts + IAM role bindings
+│   ├── ydb.tf              # YDB serverless DB + users/plank_records tables
 │   ├── api_gateway.tf      # Yandex API Gateway resource
 │   ├── outputs.tf          # Output values
 │   └── environments/

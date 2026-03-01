@@ -8,6 +8,7 @@ from datetime import date
 import openai
 
 from config import VK_GROUP_TOKEN, YANDEX_FOLDER_ID, YANDEX_LLM_API_KEY
+import db
 
 logging.getLogger().setLevel(logging.DEBUG)
 logging.getLogger(__name__).setLevel(logging.DEBUG)
@@ -42,6 +43,7 @@ GEESE_PLACEHOLDER_MESSAGES = [
     "Молчу, думаю, пишу. Гуси не торопятся.",
 ]
 
+
 def _get_vk():
     vk_session = vk_api.VkApi(token=VK_GROUP_TOKEN)
     return vk_session.get_api()
@@ -63,24 +65,55 @@ def get_user_name(user_id: int) -> str:
 
 def handle_planka(msg, text: str):
     peer_id = msg["peer_id"]
+    user_id = msg["from_id"]
 
-    plank_value = None
+    name = get_user_name(user_id)
 
+    actual_seconds = None
     parts = text.strip().split()
     if len(parts) >= 2 and parts[0].lower() == "планка":
-        plank_value = parts[1]
+        try:
+            actual_seconds = int(parts[1])
+        except ValueError:
+            actual_seconds = None
 
-    today_str = date.today().isoformat()
+    first_today = db.mark_plank(user_id, name, actual_seconds)
+    today_str = db.get_today_date_str()
 
-    if plank_value is not None:
-        send_message(peer_id, f"{today_str} планка сделана ({plank_value})")
+    if first_today:
+        if actual_seconds is not None:
+            send_message(peer_id, f"{today_str} планка сделана ({actual_seconds})")
+        else:
+            send_message(peer_id, f"{today_str} планка сделана")
     else:
-        send_message(peer_id, f"{today_str} планка сделана")
+        if actual_seconds is not None:
+            send_message(peer_id, f"планка уже сделана ({actual_seconds})")
+        else:
+            send_message(peer_id, "планка уже сделана")
 
 
 def handle_stats(msg):
     peer_id = msg["peer_id"]
-    send_message(peer_id, "Статистика временно недоступна")
+    done, not_done = db.get_stats_for_today()
+
+    today_str = db.get_today_date_str()
+    text_parts = [f"Стата за {today_str}:"]
+
+    if done:
+        text_parts.append("Сделали планку:")
+        text_parts.append(", ".join(done))
+    else:
+        text_parts.append("Сделали планку: никто")
+
+    if not_done:
+        text_parts.append("")
+        text_parts.append("Не сделали планку:")
+        text_parts.append(", ".join(not_done))
+    else:
+        text_parts.append("")
+        text_parts.append("Все отметились или ещё никто не добавлен в базу")
+
+    send_message(peer_id, "\n".join(text_parts))
 
 
 def handle_guide(msg):
@@ -88,7 +121,7 @@ def handle_guide(msg):
     text = (
         "Гайд по командам:\n"
         "• планка — отметить, что ты сделал(а) планку сегодня.\n"
-        "• планка X — отметить планку с указанием числа X (выводится в скобках, без единиц измерения).\n"
+        "• планка X — отметить планку с указанием числа секунд X.\n"
         "• стата — показать, кто сегодня сделал планку и кто нет.\n"
         "• гайд — показать это сообщение.\n"
         "• ебать гусей [контекст] — мудрая история про гусей и планку.\n"
