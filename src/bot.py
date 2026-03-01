@@ -333,18 +333,27 @@ def process_message(msg):
     #   - msg["id"] is 0 or unreliable for group chats
     #   - conversation_message_id is a per-conversation sequential counter → globally
     #     unique when combined with peer_id
+    parts = text.split()
+
     user_id = msg.get("from_id")
     peer_id_val = msg.get("peer_id", "")
     conv_msg_id = msg.get("conversation_message_id", "")
     message_id = f"{peer_id_val}_{conv_msg_id}" if (peer_id_val and conv_msg_id) else ""
-    if user_id and message_id and text_raw:
+    # Only save organic chat messages — exclude all bot commands.
+    # Commands are not real chat content and would skew LLM analysis.
+    _is_bot_command = (
+        (parts and parts[0] == "планка")
+        or text == "стата"
+        or text == "гайд"
+        or text.startswith("ебать гусей")
+        or text.startswith("кто сегодня")
+    )
+    if user_id and message_id and text_raw and not _is_bot_command:
         try:
             user_name = get_user_name(user_id)
             db.save_message(message_id, user_id, user_name, text_raw)
         except Exception as e:
             logger.warning("Failed to save message to chat_messages: %s", e)
-
-    parts = text.split()
 
     if parts and parts[0] == "планка":
         if len(parts) <= 2:

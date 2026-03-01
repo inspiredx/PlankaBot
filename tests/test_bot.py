@@ -411,6 +411,39 @@ class TestProcessMessageTracking:
             bot_module.process_message(msg)
         mock_save.assert_not_called()
 
+    def test_does_not_save_kto_segodnya_command(self, bot_module, db_module):
+        """'кто сегодня' commands are excluded from tracking to avoid skewing LLM analysis."""
+        msg = make_msg("кто сегодня самый красивый", peer_id=2000000001, from_id=111)
+        msg["conversation_message_id"] = 100
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "handle_who_is_today"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+    @pytest.mark.parametrize("command", [
+        "планка",
+        "планка 60",
+        "стата",
+        "гайд",
+        "ебать гусей",
+        "ебать гусей причмокивая",
+        "кто сегодня самый красивый",
+    ])
+    def test_does_not_save_any_bot_command(self, bot_module, db_module, command):
+        """All bot commands are excluded from chat_messages tracking."""
+        msg = make_msg(command, peer_id=2000000001, from_id=111)
+        msg["conversation_message_id"] = 200
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "handle_planka"), \
+             patch.object(bot_module, "handle_stats"), \
+             patch.object(bot_module, "handle_guide"), \
+             patch.object(bot_module, "handle_geese"), \
+             patch.object(bot_module, "handle_who_is_today"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Routing — кто сегодня
