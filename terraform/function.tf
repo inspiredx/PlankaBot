@@ -33,6 +33,10 @@ data "archive_file" "function_zip" {
     content  = file("${local.repo_root}/src/prompts/geese_story_prompt.txt")
     filename = "prompts/geese_story_prompt.txt"
   }
+  source {
+    content  = file("${local.repo_root}/src/prompts/who_is_today_prompt.txt")
+    filename = "prompts/who_is_today_prompt.txt"
+  }
 }
 
 resource "yandex_logging_group" "plankabot" {

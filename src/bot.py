@@ -15,20 +15,34 @@ logging.getLogger(__name__).setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Load the geese story system prompt once at module import time.
-# In the deployed function the file lives at prompts/geese_story_prompt.txt
-# relative to the working directory; fall back to the repo path for tests.
+# Load prompts once at module import time.
+# In the deployed function files live at prompts/<name> relative to cwd;
+# fall back to the repo path for tests.
 # ---------------------------------------------------------------------------
-_PROMPT_PATHS = [
-    os.path.join(os.path.dirname(__file__), "prompts", "geese_story_prompt.txt"),
-    os.path.join(os.path.dirname(__file__), "..", "src", "prompts", "geese_story_prompt.txt"),
-]
-GEESE_STORY_PROMPT = ""
-for _p in _PROMPT_PATHS:
-    if os.path.exists(_p):
-        with open(_p, encoding="utf-8") as _f:
-            GEESE_STORY_PROMPT = _f.read().strip()
-        break
+def _load_prompt(filename: str) -> str:
+    paths = [
+        os.path.join(os.path.dirname(__file__), "prompts", filename),
+        os.path.join(os.path.dirname(__file__), "..", "src", "prompts", filename),
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                return f.read().strip()
+    return ""
+
+
+GEESE_STORY_PROMPT = _load_prompt("geese_story_prompt.txt")
+WHO_IS_TODAY_PROMPT = _load_prompt("who_is_today_prompt.txt")
+
+# ---------------------------------------------------------------------------
+# Token economy constants for кто сегодня
+# ---------------------------------------------------------------------------
+# Model context: 32,768 tokens.
+# Reserve ~1,000 for system prompt + instruction overhead, ~500 for output.
+# Remaining budget for user messages: ~31,000 tokens.
+# Rough estimate: 1 token ≈ 3.5 Russian characters.
+_WHO_IS_TODAY_CHAR_BUDGET = 31_000 * 3  # ~93,000 chars total for all users
+_WHO_IS_TODAY_MAX_OUTPUT_TOKENS = 600
 
 GEESE_PLACEHOLDER_MESSAGES = [
     "Ну хорошо хорошо, сейчас подумаем, что можно сделать…",
@@ -41,6 +55,14 @@ GEESE_PLACEHOLDER_MESSAGES = [
     "Ок, запрос принят. Жди гусиного откровения.",
     "Стая собирается. Это займёт секунду…",
     "Молчу, думаю, пишу. Гуси не торопятся.",
+]
+
+WHO_IS_TODAY_PLACEHOLDER_MESSAGES = [
+    "Изучаю переписку… это займёт секунду.",
+    "Листаю чат, ищу достойного кандидата…",
+    "Анализирую улики. Кто-то сегодня явно отличился.",
+    "Один момент, провожу расследование…",
+    "Сейчас разберёмся, кто тут герой дня.",
 ]
 
 
@@ -125,6 +147,8 @@ def handle_guide(msg):
         "• стата — показать, кто сегодня сделал планку и кто нет.\n"
         "• гайд — показать это сообщение.\n"
         "• ебать гусей [контекст] — мудрая история про гусей и планку.\n"
+        "• кто сегодня [вопрос] — определить победителя дня по переписке в чате.\n"
+        "  Например: кто сегодня больше всех похож на Цоя?\n"
     )
     send_message(peer_id, text)
 
@@ -142,6 +166,69 @@ def _call_llm(extra_context: str) -> str:
         instructions=GEESE_STORY_PROMPT,
         input=extra_context if extra_context else "просто история",
         max_output_tokens=500,
+    )
+    return response.output_text
+
+
+def _build_who_is_today_input(question: str, user_messages: list[tuple[str, list[str]]]) -> str:
+    """
+    Build the LLM input string for кто сегодня.
+
+    Applies a fair token economy: the total character budget is divided equally
+    among all users. Within each user's quota the most-recent messages are kept
+    (reversed order, newest first) so that fresh context survives trimming.
+
+    Args:
+        question: the raw question text (e.g. "больше всех похож на Цоя")
+        user_messages: list of (user_name, [msg_text, ...]) oldest-first
+
+    Returns:
+        Formatted string to pass as `input` to the LLM.
+    """
+    if not user_messages:
+        return f"Вопрос: {question}\n\nСообщений в чате за сегодня нет."
+
+    n_users = len(user_messages)
+    per_user_budget = _WHO_IS_TODAY_CHAR_BUDGET // n_users
+
+    sections = []
+    for name, msgs in user_messages:
+        # Take newest messages first until budget is exhausted, then reverse back
+        selected: list[str] = []
+        remaining = per_user_budget
+        for msg in reversed(msgs):
+            if remaining <= 0:
+                break
+            chunk = msg[:remaining]
+            selected.append(chunk)
+            remaining -= len(chunk)
+        selected.reverse()  # restore chronological order
+
+        user_block = "\n".join(f"  — {m}" for m in selected)
+        sections.append(f"{name}:\n{user_block}")
+
+    messages_block = "\n\n".join(sections)
+    return (
+        f"Вопрос: {question}\n\n"
+        f"Переписка участников за сегодня:\n\n"
+        f"{messages_block}"
+    )
+
+
+def _call_who_is_today_llm(question: str, user_messages: list[tuple[str, list[str]]]) -> str:
+    """Call LLM for кто сегодня command."""
+    client = openai.OpenAI(
+        api_key=YANDEX_LLM_API_KEY,
+        base_url="https://ai.api.cloud.yandex.net/v1",
+        project=YANDEX_FOLDER_ID,
+    )
+    llm_input = _build_who_is_today_input(question, user_messages)
+    response = client.responses.create(
+        model=f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite/latest",
+        temperature=0.7,
+        instructions=WHO_IS_TODAY_PROMPT,
+        input=llm_input,
+        max_output_tokens=_WHO_IS_TODAY_MAX_OUTPUT_TOKENS,
     )
     return response.output_text
 
@@ -181,6 +268,56 @@ def handle_geese(msg, text_raw: str):
     send_message(peer_id, story + "\n\nВы ебете гусей.")
 
 
+def handle_who_is_today(msg, text_raw: str):
+    """
+    Handle "кто сегодня [question]" command.
+
+    1. Send a placeholder immediately.
+    2. Extract the question (everything after "кто сегодня").
+    3. Load today's messages from DB.
+    4. Apply token economy and call LLM.
+    5. Send the result.
+    """
+    peer_id = msg["peer_id"]
+
+    # Step 1 — extract question
+    trigger = "кто сегодня"
+    lower_raw = text_raw.lower()
+    idx = lower_raw.find(trigger)
+    if idx != -1:
+        question = text_raw[idx + len(trigger):].strip()
+    else:
+        question = ""
+
+    if not question:
+        send_message(peer_id, "Укажи вопрос. Например: кто сегодня больше всех похож на Цоя?")
+        return
+
+    logger.warning("handle_who_is_today: question=%r", question)
+
+    # Step 2 — send placeholder
+    send_message(peer_id, random.choice(WHO_IS_TODAY_PLACEHOLDER_MESSAGES))
+
+    # Step 3 — load messages
+    try:
+        user_messages = db.get_messages_for_today()
+    except Exception as e:
+        logger.error("Failed to load messages for who_is_today: %s", e)
+        send_message(peer_id, "Не удалось загрузить переписку. Попробуй позже.")
+        return
+
+    # Step 4 — call LLM
+    try:
+        verdict = _call_who_is_today_llm(question, user_messages)
+    except Exception as e:
+        logger.error("LLM call failed for who_is_today: %s", e)
+        send_message(peer_id, "Что-то пошло не так при анализе переписки. Попробуй позже.")
+        return
+
+    # Step 5 — send result
+    send_message(peer_id, verdict)
+
+
 def process_message(msg):
     text_raw = (msg.get("text") or "").strip()
     text = text_raw.lower()
@@ -191,7 +328,32 @@ def process_message(msg):
 
     logger.warning("Processing message from peer_id=%s: %s", msg.get("peer_id"), text_raw)
 
+    # Track every group chat message (best-effort — never block command handling)
+    # Use peer_id + conversation_message_id as the unique key:
+    #   - msg["id"] is 0 or unreliable for group chats
+    #   - conversation_message_id is a per-conversation sequential counter → globally
+    #     unique when combined with peer_id
     parts = text.split()
+
+    user_id = msg.get("from_id")
+    peer_id_val = msg.get("peer_id", "")
+    conv_msg_id = msg.get("conversation_message_id", "")
+    message_id = f"{peer_id_val}_{conv_msg_id}" if (peer_id_val and conv_msg_id) else ""
+    # Only save organic chat messages — exclude all bot commands.
+    # Commands are not real chat content and would skew LLM analysis.
+    _is_bot_command = (
+        (parts and parts[0] == "планка")
+        or text == "стата"
+        or text == "гайд"
+        or text.startswith("ебать гусей")
+        or text.startswith("кто сегодня")
+    )
+    if user_id and message_id and text_raw and not _is_bot_command:
+        try:
+            user_name = get_user_name(user_id)
+            db.save_message(message_id, user_id, user_name, text_raw)
+        except Exception as e:
+            logger.warning("Failed to save message to chat_messages: %s", e)
 
     if parts and parts[0] == "планка":
         if len(parts) <= 2:
@@ -205,3 +367,6 @@ def process_message(msg):
 
     elif text.startswith("ебать гусей"):
         handle_geese(msg, text_raw)
+
+    elif text.startswith("кто сегодня"):
+        handle_who_is_today(msg, text_raw)

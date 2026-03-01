@@ -242,6 +242,8 @@ These environment variables are set on the deployed Yandex Cloud Function:
 | `YDB_DATABASE`         | YDB database path (`/ru-central1/...`) — auto-wired from Terraform | Yes |
 | `PLANK_TIMEZONE`       | IANA timezone for day boundary calculation (default: `Europe/Moscow`) | No |
 
+> **Note:** The `chat_messages` YDB table (used by `кто сегодня`) is provisioned automatically by Terraform — no extra setup needed. Only organic free-form chat messages are stored; all bot commands are excluded from tracking automatically.
+
 For local Terraform runs, secrets can also be passed as `TF_VAR_*` variables
 to avoid writing them to `.tfvars` files:
 
@@ -280,6 +282,21 @@ pytest tests/ -v
 
 ---
 
+## Bot Commands
+
+| Command | Description |
+|---|---|
+| `планка` | Record today's plank (no duration) |
+| `планка X` | Record plank with X seconds; updates if already recorded today |
+| `стата` | Show today's plank stats: who did it, who hasn't |
+| `гайд` | Show command help |
+| `ебать гусей [context]` | Generate a goose-wisdom story via LLM |
+| `кто сегодня [question]` | Analyze today's chat and pick a winner. E.g. `кто сегодня больше всех похож на Цоя?` |
+
+All commands work in VK group chats only.
+
+---
+
 ## Project Structure
 
 ```
@@ -290,7 +307,8 @@ PlankaBot/
 │   ├── db.py               # YDB driver, session pool, all DB operations
 │   ├── config.py           # Configuration from environment variables
 │   └── prompts/
-│       └── geese_story_prompt.txt  # System prompt for the LLM geese story
+│       ├── geese_story_prompt.txt      # System prompt for the LLM geese story
+│       └── who_is_today_prompt.txt     # System prompt for кто сегодня
 ├── tests/
 │   ├── test_handler.py     # Handler unit tests
 │   ├── test_bot.py         # Bot logic unit tests
@@ -300,7 +318,7 @@ PlankaBot/
 │   ├── variables.tf        # Input variables
 │   ├── function.tf         # Yandex Cloud Function resource
 │   ├── iam.tf              # Service accounts + IAM role bindings
-│   ├── ydb.tf              # YDB serverless DB + users/plank_records tables
+│   ├── ydb.tf              # YDB serverless DB + users/plank_records/chat_messages tables
 │   ├── api_gateway.tf      # Yandex API Gateway resource
 │   ├── outputs.tf          # Output values
 │   └── environments/

@@ -355,3 +355,251 @@ class TestHandlePlanka:
              patch.object(bot_module, "send_message"):
             bot_module.handle_planka(msg, "планка")
         mock_mark.assert_called_once_with(999, "Тест Пользователь", None)
+
+
+# ---------------------------------------------------------------------------
+# process_message — message tracking
+# ---------------------------------------------------------------------------
+
+class TestProcessMessageTracking:
+    def test_saves_message_on_every_group_chat_message(self, bot_module, db_module):
+        """Every message in a group chat is saved using peer_id + conversation_message_id key."""
+        msg = make_msg("привет", peer_id=2000000001, from_id=111)
+        msg["id"] = 0  # msg["id"] is 0 in group chats (unreliable)
+        msg["conversation_message_id"] = 2709
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "send_message"):
+            bot_module.process_message(msg)
+        mock_save.assert_called_once_with("2000000001_2709", 111, "Иван Иванов", "привет")
+
+    def test_does_not_save_without_conversation_message_id(self, bot_module, db_module):
+        """If conversation_message_id is missing, message is not saved."""
+        msg = make_msg("привет", peer_id=2000000001, from_id=111)
+        # no conversation_message_id key
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "send_message"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+    def test_save_message_failure_does_not_prevent_routing(self, bot_module, db_module):
+        """If save_message raises, the command is still handled."""
+        msg = make_msg("гайд", peer_id=2000000001, from_id=111)
+        msg["id"] = 1
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message", side_effect=RuntimeError("db down")), \
+             patch.object(bot_module, "handle_guide") as mock_guide:
+            bot_module.process_message(msg)
+        mock_guide.assert_called_once()
+
+    def test_does_not_save_message_for_private_chats(self, bot_module, db_module):
+        """Private messages (peer_id < 2_000_000_000) are not saved."""
+        msg = make_msg("привет", peer_id=111, from_id=111)
+        msg["id"] = 99
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save:
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+    def test_does_not_save_empty_text(self, bot_module, db_module):
+        """Messages with empty text are not saved."""
+        msg = {"text": "", "peer_id": 2000000001, "from_id": 111, "id": 5}
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "send_message"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+    def test_does_not_save_kto_segodnya_command(self, bot_module, db_module):
+        """'кто сегодня' commands are excluded from tracking to avoid skewing LLM analysis."""
+        msg = make_msg("кто сегодня самый красивый", peer_id=2000000001, from_id=111)
+        msg["conversation_message_id"] = 100
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "handle_who_is_today"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+    @pytest.mark.parametrize("command", [
+        "планка",
+        "планка 60",
+        "стата",
+        "гайд",
+        "ебать гусей",
+        "ебать гусей причмокивая",
+        "кто сегодня самый красивый",
+    ])
+    def test_does_not_save_any_bot_command(self, bot_module, db_module, command):
+        """All bot commands are excluded from chat_messages tracking."""
+        msg = make_msg(command, peer_id=2000000001, from_id=111)
+        msg["conversation_message_id"] = 200
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "handle_planka"), \
+             patch.object(bot_module, "handle_stats"), \
+             patch.object(bot_module, "handle_guide"), \
+             patch.object(bot_module, "handle_geese"), \
+             patch.object(bot_module, "handle_who_is_today"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Routing — кто сегодня
+# ---------------------------------------------------------------------------
+
+class TestProcessMessageRoutingWhoIsToday:
+    def test_routes_kto_segodnya_command(self, bot_module):
+        with patch.object(bot_module, "handle_who_is_today") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"), \
+             patch("db.save_message"):
+            bot_module.process_message(make_msg("кто сегодня самый красивый"))
+        mock_fn.assert_called_once()
+
+    def test_routes_kto_segodnya_with_multiword_context(self, bot_module):
+        with patch.object(bot_module, "handle_who_is_today") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"), \
+             patch("db.save_message"):
+            bot_module.process_message(make_msg("кто сегодня больше всех похож на Цоя"))
+        mock_fn.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# handle_who_is_today
+# ---------------------------------------------------------------------------
+
+class TestHandleWhoIsToday:
+    def _make_user_messages(self):
+        return [
+            ("Иван Иванов", ["Привет", "я сегодня попал под автобус"]),
+            ("Мария Смирнова", ["всё хорошо"]),
+        ]
+
+    def test_no_question_sends_hint(self, bot_module, db_module):
+        """Empty question after 'кто сегодня' → sends usage hint."""
+        msg = make_msg("кто сегодня")
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(db_module, "get_messages_for_today") as mock_get:
+            bot_module.handle_who_is_today(msg, "кто сегодня")
+        mock_send.assert_called_once()
+        assert "вопрос" in mock_send.call_args[0][1].lower() or "укажи" in mock_send.call_args[0][1].lower()
+        mock_get.assert_not_called()
+
+    def test_sends_placeholder_then_verdict(self, bot_module, db_module):
+        """Two send_message calls: placeholder first, verdict second."""
+        msg = make_msg("кто сегодня самый красивый")
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(db_module, "get_messages_for_today", return_value=self._make_user_messages()), \
+             patch.object(bot_module, "_call_who_is_today_llm", return_value="Победитель: Иван"):
+            bot_module.handle_who_is_today(msg, "кто сегодня самый красивый")
+        assert mock_send.call_count == 2
+        placeholder = mock_send.call_args_list[0][0][1]
+        assert placeholder in bot_module.WHO_IS_TODAY_PLACEHOLDER_MESSAGES
+        verdict = mock_send.call_args_list[1][0][1]
+        assert verdict == "Победитель: Иван"
+
+    def test_extracts_question_correctly(self, bot_module, db_module):
+        """Question after 'кто сегодня' is extracted and passed to LLM."""
+        msg = make_msg("кто сегодня самый вонючий")
+        with patch.object(bot_module, "send_message"), \
+             patch.object(db_module, "get_messages_for_today", return_value=[]), \
+             patch.object(bot_module, "_call_who_is_today_llm", return_value="ответ") as mock_llm:
+            bot_module.handle_who_is_today(msg, "кто сегодня самый вонючий")
+        mock_llm.assert_called_once()
+        question_arg = mock_llm.call_args[0][0]
+        assert question_arg == "самый вонючий"
+
+    def test_case_insensitive_trigger(self, bot_module, db_module):
+        """Trigger matched case-insensitively; question extracted correctly."""
+        msg = make_msg("Кто Сегодня САМЫЙ КРАСИВЫЙ")
+        with patch.object(bot_module, "send_message"), \
+             patch.object(db_module, "get_messages_for_today", return_value=[]), \
+             patch.object(bot_module, "_call_who_is_today_llm", return_value="ответ") as mock_llm:
+            bot_module.handle_who_is_today(msg, "Кто Сегодня САМЫЙ КРАСИВЫЙ")
+        question_arg = mock_llm.call_args[0][0]
+        assert question_arg == "САМЫЙ КРАСИВЫЙ"
+
+    def test_db_failure_sends_error_message(self, bot_module, db_module):
+        """If get_messages_for_today raises, user gets an error message."""
+        msg = make_msg("кто сегодня самый красивый")
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(db_module, "get_messages_for_today", side_effect=RuntimeError("db error")):
+            bot_module.handle_who_is_today(msg, "кто сегодня самый красивый")
+        # placeholder + error
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "не удалось" in error_text.lower() or "пошло не так" in error_text.lower()
+
+    def test_llm_failure_sends_error_message(self, bot_module, db_module):
+        """If LLM raises, user gets an error message."""
+        msg = make_msg("кто сегодня самый красивый")
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(db_module, "get_messages_for_today", return_value=self._make_user_messages()), \
+             patch.object(bot_module, "_call_who_is_today_llm", side_effect=RuntimeError("llm error")):
+            bot_module.handle_who_is_today(msg, "кто сегодня самый красивый")
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "пошло не так" in error_text.lower()
+
+    def test_peer_id_used_for_all_messages(self, bot_module, db_module):
+        """All send_message calls use the correct peer_id."""
+        msg = make_msg("кто сегодня красивый", peer_id=2000000099)
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(db_module, "get_messages_for_today", return_value=[]), \
+             patch.object(bot_module, "_call_who_is_today_llm", return_value="ответ"):
+            bot_module.handle_who_is_today(msg, "кто сегодня красивый")
+        for c in mock_send.call_args_list:
+            assert c[0][0] == 2000000099
+
+    def test_who_is_today_placeholder_messages_non_empty(self, bot_module):
+        assert len(bot_module.WHO_IS_TODAY_PLACEHOLDER_MESSAGES) > 0
+        for m in bot_module.WHO_IS_TODAY_PLACEHOLDER_MESSAGES:
+            assert isinstance(m, str) and len(m) > 0
+
+
+# ---------------------------------------------------------------------------
+# _build_who_is_today_input — token economy
+# ---------------------------------------------------------------------------
+
+class TestBuildWhoIsTodayInput:
+    def test_empty_messages_returns_no_messages_text(self, bot_module):
+        result = bot_module._build_who_is_today_input("самый красивый", [])
+        assert "самый красивый" in result
+        assert "нет" in result.lower()
+
+    def test_includes_question_in_output(self, bot_module):
+        user_msgs = [("Иван Иванов", ["Привет"])]
+        result = bot_module._build_who_is_today_input("больше всех похож на Цоя", user_msgs)
+        assert "больше всех похож на Цоя" in result
+
+    def test_includes_user_name_in_output(self, bot_module):
+        user_msgs = [("Иван Иванов", ["Привет"]), ("Мария Смирнова", ["Пока"])]
+        result = bot_module._build_who_is_today_input("вопрос", user_msgs)
+        assert "Иван Иванов" in result
+        assert "Мария Смирнова" in result
+
+    def test_includes_messages_in_output(self, bot_module):
+        user_msgs = [("Иван Иванов", ["Попал под автобус"])]
+        result = bot_module._build_who_is_today_input("похож на Цоя", user_msgs)
+        assert "Попал под автобус" in result
+
+    def test_per_user_budget_limits_total_chars(self, bot_module):
+        """Output stays within roughly the character budget."""
+        # Create a single user with very many long messages
+        long_msgs = ["А" * 10_000] * 50  # 500,000 chars total
+        user_msgs = [("Болтун Максимальный", long_msgs)]
+        result = bot_module._build_who_is_today_input("вопрос", user_msgs)
+        # With 1 user, budget is ~93,000 chars; output should not be astronomically large
+        assert len(result) < 110_000
+
+    def test_fair_split_across_users(self, bot_module):
+        """Each user gets roughly equal share of the budget."""
+        msgs_a = ["А" * 1000] * 200  # 200,000 chars
+        msgs_b = ["Б" * 1000] * 200
+        user_msgs = [("Пользователь А", msgs_a), ("Пользователь Б", msgs_b)]
+        result = bot_module._build_who_is_today_input("вопрос", user_msgs)
+        count_a = result.count("А")
+        count_b = result.count("Б")
+        # Both users should have similar representation (within 10% of each other)
+        assert abs(count_a - count_b) < max(count_a, count_b) * 0.1
