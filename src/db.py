@@ -245,6 +245,74 @@ def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> PlankM
     return pool.retry_operation_sync(_callee)
 
 
+def save_message(message_id: str, user_id: int, user_name: str, text: str) -> None:
+    """
+    Persist an incoming chat message to chat_messages table.
+
+    Uses UPSERT for idempotency (same message_id is safe to re-insert).
+    Best-effort: caller should catch and log exceptions rather than propagating.
+    """
+    pool = _get_pool()
+    today = get_today_date_str()
+    now_us = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+
+    pool.execute_with_retries(
+        """
+        DECLARE $message_id AS Utf8;
+        DECLARE $user_id AS Int64;
+        DECLARE $user_name AS Utf8;
+        DECLARE $msg_date AS Utf8;
+        DECLARE $text AS Utf8;
+        DECLARE $created_at AS Timestamp;
+
+        UPSERT INTO chat_messages (message_id, user_id, user_name, msg_date, text, created_at)
+        VALUES ($message_id, $user_id, $user_name, $msg_date, $text, $created_at);
+        """,
+        {
+            "$message_id": message_id,
+            "$user_id": user_id,
+            "$user_name": user_name,
+            "$msg_date": today,
+            "$text": text,
+            "$created_at": (now_us, ydb.PrimitiveType.Timestamp),
+        },
+    )
+
+
+def get_messages_for_today() -> list[tuple[str, list[str]]]:
+    """
+    Return today's chat messages grouped by user, ordered by user_name.
+
+    Returns a list of (user_name, [text, ...]) tuples where messages
+    within each user are ordered oldest-first (ascending created_at).
+    Only users who sent at least one message today are included.
+    """
+    pool = _get_pool()
+    today = get_today_date_str()
+
+    result_sets = pool.execute_with_retries(
+        """
+        DECLARE $msg_date AS Utf8;
+
+        SELECT user_name, text
+        FROM chat_messages
+        WHERE msg_date = $msg_date
+        ORDER BY user_name, created_at;
+        """,
+        {"$msg_date": today},
+    )
+
+    # Group rows by user_name preserving order
+    grouped: dict[str, list[str]] = {}
+    for row in result_sets[0].rows:
+        name = row.user_name
+        if name not in grouped:
+            grouped[name] = []
+        grouped[name].append(row.text)
+
+    return [(name, msgs) for name, msgs in sorted(grouped.items())]
+
+
 def get_stats_for_today() -> tuple[list[str], list[str]]:
     """
     Return (done, not_done) lists for today.

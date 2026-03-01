@@ -77,3 +77,50 @@ resource "yandex_ydb_table" "plank_records" {
     expire_interval = "P90D"
   }
 }
+
+resource "yandex_ydb_table" "chat_messages" {
+  path              = "chat_messages"
+  connection_string = yandex_ydb_database_serverless.plankabot.ydb_full_endpoint
+
+  column {
+    name     = "message_id"
+    type     = "Utf8"
+    not_null = true
+  }
+  column {
+    name     = "user_id"
+    type     = "Int64"
+    not_null = true
+  }
+  column {
+    name     = "user_name"
+    type     = "Utf8"
+    not_null = true
+  }
+  column {
+    name     = "msg_date"
+    type     = "Utf8"
+    not_null = true
+  }
+  column {
+    name     = "text"
+    type     = "Utf8"
+    not_null = true
+  }
+  column {
+    name     = "created_at"
+    type     = "Timestamp"
+    not_null = true
+  }
+
+  # No secondary index on msg_date: with 10-20 users and 1-day TTL the table
+  # holds at most ~2,000 rows at any time. A full scan by msg_date is
+  # single-digit milliseconds — an index would add write overhead on every
+  # incoming message with zero practical read benefit.
+  primary_key = ["message_id"]
+
+  ttl {
+    column_name     = "created_at"
+    expire_interval = "P1D"
+  }
+}

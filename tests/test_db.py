@@ -619,3 +619,124 @@ class TestGetStatsForToday:
             # params is the second positional arg
             assert "$plank_date" in c[0][1]
             assert c[0][1]["$plank_date"] == "2026-03-01"
+
+
+# ---------------------------------------------------------------------------
+# save_message
+# ---------------------------------------------------------------------------
+
+class TestSaveMessage:
+    def _setup_pool(self, db_module):
+        pool = MagicMock()
+        pool.execute_with_retries.return_value = [MagicMock()]
+        db_module._pool = pool
+        return pool
+
+    def test_calls_execute_with_retries_once(self, db_module):
+        pool = self._setup_pool(db_module)
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            db_module.save_message("msg123", 111, "Иван Иванов", "Привет всем")
+        assert pool.execute_with_retries.call_count == 1
+
+    def test_passes_correct_params(self, db_module):
+        pool = self._setup_pool(db_module)
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            db_module.save_message("msg999", 42, "Мария Смирнова", "Привет")
+        params = pool.execute_with_retries.call_args[0][1]
+        assert params["$message_id"] == "msg999"
+        assert params["$user_id"] == 42
+        assert params["$user_name"] == "Мария Смирнова"
+        assert params["$msg_date"] == "2026-03-01"
+        assert params["$text"] == "Привет"
+
+    def test_created_at_is_timestamp_tuple(self, db_module):
+        """$created_at must be a (value, Timestamp) tuple for YDB SDK."""
+        import ydb
+        pool = self._setup_pool(db_module)
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            db_module.save_message("msg1", 1, "Тест", "текст")
+        params = pool.execute_with_retries.call_args[0][1]
+        created_at = params["$created_at"]
+        assert isinstance(created_at, tuple)
+        assert created_at[1] == ydb.PrimitiveType.Timestamp
+
+    def test_uses_upsert_query(self, db_module):
+        """Query must be an UPSERT (idempotent)."""
+        pool = self._setup_pool(db_module)
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            db_module.save_message("msg1", 1, "Тест", "текст")
+        query = pool.execute_with_retries.call_args[0][0]
+        assert "UPSERT" in query.upper()
+
+
+# ---------------------------------------------------------------------------
+# get_messages_for_today
+# ---------------------------------------------------------------------------
+
+def _make_msg_row(user_name, text):
+    row = MagicMock()
+    row.user_name = user_name
+    row.text = text
+    return row
+
+
+class TestGetMessagesForToday:
+    def _setup_pool(self, db_module, rows):
+        pool = MagicMock()
+        rs = MagicMock()
+        rs.rows = rows
+        pool.execute_with_retries.return_value = [rs]
+        db_module._pool = pool
+        return pool
+
+    def test_returns_empty_list_when_no_messages(self, db_module):
+        self._setup_pool(db_module, [])
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            result = db_module.get_messages_for_today()
+        assert result == []
+
+    def test_groups_messages_by_user(self, db_module):
+        rows = [
+            _make_msg_row("Иван Иванов", "Привет"),
+            _make_msg_row("Иван Иванов", "Как дела?"),
+            _make_msg_row("Мария Смирнова", "Всё хорошо"),
+        ]
+        self._setup_pool(db_module, rows)
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            result = db_module.get_messages_for_today()
+
+        result_dict = dict(result)
+        assert "Иван Иванов" in result_dict
+        assert "Мария Смирнова" in result_dict
+        assert result_dict["Иван Иванов"] == ["Привет", "Как дела?"]
+        assert result_dict["Мария Смирнова"] == ["Всё хорошо"]
+
+    def test_sorted_by_user_name(self, db_module):
+        rows = [
+            _make_msg_row("Пётр Петров", "раз"),
+            _make_msg_row("Анна Кузнецова", "два"),
+            _make_msg_row("Иван Иванов", "три"),
+        ]
+        self._setup_pool(db_module, rows)
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            result = db_module.get_messages_for_today()
+
+        names = [name for name, _ in result]
+        assert names == sorted(names)
+
+    def test_passes_msg_date_param(self, db_module):
+        pool = self._setup_pool(db_module, [])
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            db_module.get_messages_for_today()
+        params = pool.execute_with_retries.call_args[0][1]
+        assert "$msg_date" in params
+        assert params["$msg_date"] == "2026-03-01"
+
+    def test_single_user_single_message(self, db_module):
+        rows = [_make_msg_row("Иван Иванов", "Только я тут")]
+        self._setup_pool(db_module, rows)
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            result = db_module.get_messages_for_today()
+        assert len(result) == 1
+        assert result[0][0] == "Иван Иванов"
+        assert result[0][1] == ["Только я тут"]

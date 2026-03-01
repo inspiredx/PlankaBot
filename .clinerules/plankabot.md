@@ -18,6 +18,7 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - `стата` — show today's plank stats: who did it and who hasn't (today = UTC+3 by default)
 - `гайд` — show command help
 - `ебать гусей [context]` — generate a goose-wisdom story via LLM
+- `кто сегодня [question]` — analyze today's chat messages and pick a winner based on the question (e.g. "кто сегодня больше всех похож на Цоя?")
 
 ## Data Architecture (YDB Serverless, row-oriented)
 ### `users` table
@@ -33,6 +34,22 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - `actual_seconds` Int32 nullable — the value provided by user
 - `created_at` Timestamp
 - PK: (`user_id`, `plank_date`) — one record per user per day, natural dedup
+
+### `chat_messages` table
+- `message_id` Utf8 PK — VK message ID (cast to string), globally unique; natural dedup via UPSERT
+- `user_id` Int64 not null — sender VK user ID
+- `user_name` Utf8 not null — display name (denormalized to avoid joins)
+- `msg_date` Utf8 not null — ISO date string in configured timezone; used for day filtering
+- `text` Utf8 not null — message text
+- `created_at` Timestamp not null — TTL column
+- TTL: P1D (1 day — only today's messages are needed)
+- No secondary index: at most ~2,000 rows at any time; full scan is trivially fast
+
+## Key Design Decisions — `кто сегодня`
+- **Message tracking**: every incoming group chat message is saved to `chat_messages` via `db.save_message()` in `process_message()`, before command routing. Best-effort: exceptions are logged and never block the bot response.
+- **Token economy**: `_build_who_is_today_input()` divides a fixed char budget (~93,000 chars ≈ 31,000 tokens) equally among N users. Within each user's share, newest messages are kept first (reversed iteration) so fresh context survives trimming when a user has many messages.
+- **Prompt**: `src/prompts/who_is_today_prompt.txt` — Russian-language judge prompt; picks exactly one winner by name with ironic explanation. General enough for any context question.
+- **No context → hint**: if `кто сегодня` is sent without a question, a usage hint is returned immediately without hitting the DB or LLM.
 
 ## Key Design Decisions
 - **`PlankMarkResult(is_new, was_updated)`**: `mark_plank` returns a NamedTuple instead of bool; `is_new=True` → first insert, `was_updated=True` → existing record's `actual_seconds` updated, both False → no-op duplicate
