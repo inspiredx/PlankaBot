@@ -334,6 +334,7 @@ def _call_who_is_today_llm(question: str, user_messages: list[tuple[str, list[st
         project=YANDEX_FOLDER_ID,
     )
     llm_input = _build_who_is_today_input(question, user_messages)
+    logger.info("_call_who_is_today_llm: llm_input=%r WHO_IS_TODAY_PROMPT=%r", llm_input, WHO_IS_TODAY_PROMPT)
     response = client.responses.create(
         model=f"gpt://{YANDEX_FOLDER_ID}/{DEFAULT_MODEL}",
         temperature=DEFAULT_TEMPERATURE,
