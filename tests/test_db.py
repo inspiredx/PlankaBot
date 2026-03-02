@@ -622,6 +622,251 @@ class TestGetStatsForToday:
 
 
 # ---------------------------------------------------------------------------
+# ensure_user
+# ---------------------------------------------------------------------------
+
+def _make_ensure_user_pool(execute_results, raise_on_execute=None):
+    """Build a mock pool for ensure_user tests (same shape as mark_plank pool)."""
+    mock_pool = MagicMock()
+
+    def _retry(callee):
+        mock_session = MagicMock()
+        mock_tx = MagicMock()
+        mock_session.transaction.return_value = mock_tx
+
+        if raise_on_execute:
+            mock_tx.execute.side_effect = raise_on_execute
+        else:
+            mock_tx.execute = make_context_manager_execute(execute_results)
+
+        return callee(mock_session)
+
+    mock_pool.retry_operation_sync.side_effect = _retry
+    return mock_pool
+
+
+class TestEnsureUser:
+    def test_new_user_two_execute_calls(self, db_module):
+        """ensure_user for a new user makes exactly 2 execute calls: read + upsert."""
+        execute_call_count = [0]
+
+        @contextmanager
+        def _counting_execute(query, params=None, commit_tx=False):
+            idx = execute_call_count[0]
+            execute_call_count[0] += 1
+            results = [_no_existing_user(), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _counting_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        db_module.ensure_user(111, "Иван Иванов")
+
+        assert execute_call_count[0] == 2
+
+    def test_existing_user_two_execute_calls(self, db_module):
+        """ensure_user for an existing user also makes exactly 2 execute calls."""
+        execute_call_count = [0]
+
+        @contextmanager
+        def _counting_execute(query, params=None, commit_tx=False):
+            idx = execute_call_count[0]
+            execute_call_count[0] += 1
+            results = [_existing_user(is_bot_admin=True, created_at=9999), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _counting_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        db_module.ensure_user(111, "Иван Иванов")
+
+        assert execute_call_count[0] == 2
+
+    def test_existing_user_preserves_is_bot_admin(self, db_module):
+        """ensure_user preserves is_bot_admin=True from existing row."""
+        captured_params = []
+
+        @contextmanager
+        def _capturing_execute(query, params=None, commit_tx=False):
+            captured_params.append(params or {})
+            idx = len(captured_params) - 1
+            results = [_existing_user(is_bot_admin=True, created_at=1234), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _capturing_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        db_module.ensure_user(111, "Иван Иванов")
+
+        # 2nd call (index 1) is the UPSERT
+        upsert_params = captured_params[1]
+        assert upsert_params["$is_bot_admin"] is True
+
+    def test_new_user_is_bot_admin_defaults_false(self, db_module):
+        """ensure_user sets is_bot_admin=False for a new user."""
+        captured_params = []
+
+        @contextmanager
+        def _capturing_execute(query, params=None, commit_tx=False):
+            captured_params.append(params or {})
+            idx = len(captured_params) - 1
+            results = [_no_existing_user(), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _capturing_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        db_module.ensure_user(111, "Иван Иванов")
+
+        upsert_params = captured_params[1]
+        assert upsert_params["$is_bot_admin"] is False
+
+    def test_upsert_commit_tx_true(self, db_module):
+        """The upsert execute call (2nd) must have commit_tx=True."""
+        commit_tx_values = []
+
+        @contextmanager
+        def _tracking_execute(query, params=None, commit_tx=False):
+            commit_tx_values.append(commit_tx)
+            idx = len(commit_tx_values) - 1
+            results = [_no_existing_user(), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _tracking_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        db_module.ensure_user(111, "Иван Иванов")
+
+        assert commit_tx_values == [False, True]
+
+    def test_uses_serializable_read_write_transaction(self, db_module):
+        """ensure_user uses QuerySerializableReadWrite isolation."""
+        import ydb
+
+        captured_tx_mode = []
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+
+            def _capture_tx_mode(mode):
+                captured_tx_mode.append(mode)
+                return mock_tx
+
+            mock_session.transaction.side_effect = _capture_tx_mode
+            mock_tx.execute = make_context_manager_execute([_no_existing_user(), []])
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        db_module.ensure_user(111, "Иван Иванов")
+
+        assert len(captured_tx_mode) == 1
+        assert isinstance(captured_tx_mode[0], ydb.QuerySerializableReadWrite)
+
+    def test_upsert_passes_correct_user_id_and_name(self, db_module):
+        """ensure_user passes user_id and name to the upsert call."""
+        captured_params = []
+
+        @contextmanager
+        def _capturing_execute(query, params=None, commit_tx=False):
+            captured_params.append(params or {})
+            idx = len(captured_params) - 1
+            results = [_no_existing_user(), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _capturing_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        db_module.ensure_user(42, "Мария Смирнова")
+
+        upsert_params = captured_params[1]
+        assert upsert_params["$user_id"] == 42
+        assert upsert_params["$name"] == "Мария Смирнова"
+
+    def test_rollback_called_on_exception(self, db_module):
+        """If execute raises, rollback is called and exception re-raised."""
+        rolled_back = [False]
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+
+            @contextmanager
+            def _raising_execute(query, params=None, commit_tx=False):
+                raise RuntimeError("YDB error")
+                yield
+
+            mock_tx.execute = _raising_execute
+
+            def _rollback():
+                rolled_back[0] = True
+
+            mock_tx.rollback.side_effect = _rollback
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        with pytest.raises(RuntimeError, match="YDB error"):
+            db_module.ensure_user(111, "Иван Иванов")
+
+        assert rolled_back[0] is True
+
+
+# ---------------------------------------------------------------------------
 # save_message
 # ---------------------------------------------------------------------------
 

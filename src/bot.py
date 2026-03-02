@@ -437,6 +437,17 @@ def process_message(msg):
     peer_id_val = msg.get("peer_id", "")
     conv_msg_id = msg.get("conversation_message_id", "")
     message_id = f"{peer_id_val}_{conv_msg_id}" if (peer_id_val and conv_msg_id) else ""
+
+    # Always ensure user exists in users table (best-effort — never block command handling).
+    # Resolving the name once here also reuses it for save_message below.
+    _fetched_user_name = None
+    if user_id:
+        try:
+            _fetched_user_name = get_user_name(user_id)
+            db.ensure_user(user_id, _fetched_user_name)
+        except Exception as e:
+            logger.warning("Failed to ensure user in users table: %s", e)
+
     # Only save organic chat messages — exclude all bot commands.
     # Commands are not real chat content and would skew LLM analysis.
     _is_bot_command = (
@@ -447,10 +458,9 @@ def process_message(msg):
         or text.startswith("кто сегодня")
         or text.startswith("объясни")
     )
-    if user_id and message_id and text_raw and not _is_bot_command:
+    if user_id and message_id and text_raw and not _is_bot_command and _fetched_user_name:
         try:
-            user_name = get_user_name(user_id)
-            db.save_message(message_id, user_id, user_name, text_raw)
+            db.save_message(message_id, user_id, _fetched_user_name, text_raw)
         except Exception as e:
             logger.warning("Failed to save message to chat_messages: %s", e)
 

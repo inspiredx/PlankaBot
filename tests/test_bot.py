@@ -717,6 +717,102 @@ class TestHandleExplain:
 
 
 # ---------------------------------------------------------------------------
+# process_message — ensure_user
+# ---------------------------------------------------------------------------
+
+class TestProcessMessageEnsureUser:
+    def test_ensure_user_called_for_organic_message(self, bot_module, db_module):
+        """ensure_user is called for every group chat message (organic text)."""
+        msg = make_msg("привет", peer_id=2000000001, from_id=111)
+        msg["conversation_message_id"] = 100
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "ensure_user") as mock_ensure, \
+             patch.object(db_module, "save_message"):
+            bot_module.process_message(msg)
+        mock_ensure.assert_called_once_with(111, "Иван Иванов")
+
+    def test_ensure_user_called_for_command_message(self, bot_module, db_module):
+        """ensure_user is called even when the message is a bot command."""
+        msg = make_msg("гайд", peer_id=2000000001, from_id=222)
+        with patch.object(bot_module, "get_user_name", return_value="Мария Смирнова"), \
+             patch.object(db_module, "ensure_user") as mock_ensure, \
+             patch.object(bot_module, "handle_guide"):
+            bot_module.process_message(msg)
+        mock_ensure.assert_called_once_with(222, "Мария Смирнова")
+
+    def test_ensure_user_called_for_planka_command(self, bot_module, db_module):
+        """ensure_user is called for the планка command."""
+        msg = make_msg("планка", peer_id=2000000001, from_id=333)
+        with patch.object(bot_module, "get_user_name", return_value="Пётр Петров"), \
+             patch.object(db_module, "ensure_user") as mock_ensure, \
+             patch.object(bot_module, "handle_planka"):
+            bot_module.process_message(msg)
+        mock_ensure.assert_called_once_with(333, "Пётр Петров")
+
+    def test_ensure_user_uses_same_name_as_save_message(self, bot_module, db_module):
+        """get_user_name is called once; that name goes to both ensure_user and save_message."""
+        msg = make_msg("привет", peer_id=2000000001, from_id=111)
+        msg["conversation_message_id"] = 200
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов") as mock_get_name, \
+             patch.object(db_module, "ensure_user") as mock_ensure, \
+             patch.object(db_module, "save_message") as mock_save:
+            bot_module.process_message(msg)
+        # Only one VK API call for name
+        mock_get_name.assert_called_once_with(111)
+        # Both receive the same name
+        mock_ensure.assert_called_once_with(111, "Иван Иванов")
+        mock_save.assert_called_once_with("2000000001_200", 111, "Иван Иванов", "привет")
+
+    def test_ensure_user_failure_does_not_prevent_routing(self, bot_module, db_module):
+        """If ensure_user raises, command routing still happens."""
+        msg = make_msg("гайд", peer_id=2000000001, from_id=111)
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "ensure_user", side_effect=RuntimeError("db down")), \
+             patch.object(bot_module, "handle_guide") as mock_guide:
+            bot_module.process_message(msg)
+        mock_guide.assert_called_once()
+
+    def test_ensure_user_failure_does_not_call_save_message(self, bot_module, db_module):
+        """If get_user_name fails (ensure_user block fails), save_message is skipped."""
+        msg = make_msg("привет", peer_id=2000000001, from_id=111)
+        msg["conversation_message_id"] = 300
+        with patch.object(bot_module, "get_user_name", side_effect=RuntimeError("vk error")), \
+             patch.object(db_module, "ensure_user") as mock_ensure, \
+             patch.object(db_module, "save_message") as mock_save:
+            bot_module.process_message(msg)
+        mock_ensure.assert_not_called()
+        mock_save.assert_not_called()
+
+    def test_ensure_user_not_called_for_private_chat(self, bot_module, db_module):
+        """Private messages (peer_id < 2_000_000_000) → ensure_user never called."""
+        msg = make_msg("привет", peer_id=111, from_id=111)
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "ensure_user") as mock_ensure:
+            bot_module.process_message(msg)
+        mock_ensure.assert_not_called()
+
+    @pytest.mark.parametrize("command", [
+        "стата",
+        "гайд",
+        "ебать гусей",
+        "кто сегодня самый красивый",
+        "объясни по-пацански",
+    ])
+    def test_ensure_user_called_for_all_commands(self, bot_module, db_module, command):
+        """ensure_user is called for all bot commands."""
+        msg = make_msg(command, peer_id=2000000001, from_id=444)
+        with patch.object(bot_module, "get_user_name", return_value="Тест Юзер"), \
+             patch.object(db_module, "ensure_user") as mock_ensure, \
+             patch.object(bot_module, "handle_stats"), \
+             patch.object(bot_module, "handle_guide"), \
+             patch.object(bot_module, "handle_geese"), \
+             patch.object(bot_module, "handle_who_is_today"), \
+             patch.object(bot_module, "handle_explain"):
+            bot_module.process_message(msg)
+        mock_ensure.assert_called_once_with(444, "Тест Юзер")
+
+
+# ---------------------------------------------------------------------------
 # process_message — объясни routing and tracking
 # ---------------------------------------------------------------------------
 

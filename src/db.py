@@ -245,6 +245,77 @@ def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> PlankM
     return pool.retry_operation_sync(_callee)
 
 
+def ensure_user(user_id: int, name: str) -> None:
+    """
+    Create or update user in the users table.
+
+    Preserves is_bot_admin and created_at if the user already exists.
+    Updates name and last_activity on every call.
+
+    Uses an explicit SerializableReadWrite transaction (same as mark_plank steps 1-2).
+    Best-effort: caller should catch and log exceptions rather than propagating.
+    """
+    pool = _get_pool()
+    now_us = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+
+    def _callee(session: ydb.QuerySession):
+        tx = session.transaction(ydb.QuerySerializableReadWrite())
+
+        try:
+            # Read existing user row to preserve is_bot_admin and created_at
+            with tx.execute(
+                """
+                DECLARE $user_id AS Int64;
+
+                SELECT is_bot_admin, created_at
+                FROM users
+                WHERE user_id = $user_id;
+                """,
+                {"$user_id": user_id},
+                commit_tx=False,
+            ) as result_sets:
+                rows = list(result_sets)[0].rows
+
+            if rows:
+                is_bot_admin = rows[0].is_bot_admin
+                created_at = rows[0].created_at
+            else:
+                is_bot_admin = False
+                created_at = now_us
+
+            # Upsert user with preserved values
+            with tx.execute(
+                """
+                DECLARE $user_id AS Int64;
+                DECLARE $name AS Utf8;
+                DECLARE $is_bot_admin AS Bool;
+                DECLARE $last_activity AS Timestamp;
+                DECLARE $created_at AS Timestamp;
+
+                UPSERT INTO users (user_id, name, is_bot_admin, last_activity, created_at)
+                VALUES ($user_id, $name, $is_bot_admin, $last_activity, $created_at);
+                """,
+                {
+                    "$user_id": user_id,
+                    "$name": name,
+                    "$is_bot_admin": is_bot_admin,
+                    "$last_activity": (now_us, ydb.PrimitiveType.Timestamp),
+                    "$created_at": (created_at, ydb.PrimitiveType.Timestamp),
+                },
+                commit_tx=True,
+            ) as _:
+                pass
+
+        except Exception:
+            try:
+                tx.rollback()
+            except Exception:
+                pass
+            raise
+
+    pool.retry_operation_sync(_callee)
+
+
 def save_message(message_id: str, user_id: int, user_name: str, text: str) -> None:
     """
     Persist an incoming chat message to chat_messages table.
