@@ -983,3 +983,117 @@ class TestBuildWhoIsTodayInput:
         count_b = result.count("Б")
         # Both users should have similar representation (within 10% of each other)
         assert abs(count_a - count_b) < max(count_a, count_b) * 0.1
+
+    # ------------------------------------------------------------------
+    # New tests for anti-skew fixes
+    # ------------------------------------------------------------------
+
+    def test_message_cap_limits_high_volume_user(self, bot_module):
+        """A user with many more messages than the cap is truncated to the cap."""
+        max_cap = bot_module._WHO_IS_TODAY_MAX_MSGS_PER_USER
+        # Use a UUID-like unique prefix so no message text is a substring of another
+        many_msgs = [f"уникальное_аааа_{i:04d}" for i in range(max_cap * 4)]
+        user_msgs = [("Болтун", many_msgs)]
+        result = bot_module._build_who_is_today_input("вопрос", user_msgs)
+        # Count how many unique messages appear in result (each has a unique 4-digit suffix)
+        included = [m for m in many_msgs if m in result]
+        assert len(included) <= max_cap
+
+    def test_message_cap_keeps_most_recent_messages(self, bot_module):
+        """When capped, the MOST RECENT messages are kept, not the oldest."""
+        max_cap = bot_module._WHO_IS_TODAY_MAX_MSGS_PER_USER
+        # Build messages: oldest are "старое_N", newest are "новое_N"
+        old_msgs = [f"старое_{i}" for i in range(50)]
+        new_msgs = [f"новое_{i}" for i in range(max_cap)]
+        all_msgs = old_msgs + new_msgs  # oldest first, newest last
+        user_msgs = [("Пользователь", all_msgs)]
+        result = bot_module._build_who_is_today_input("вопрос", user_msgs)
+        # All new messages should be present
+        for m in new_msgs:
+            assert m in result, f"Expected recent message '{m}' to be present"
+        # Old messages should NOT be present (they were trimmed)
+        for m in old_msgs:
+            assert m not in result, f"Expected old message '{m}' to be absent"
+
+    def test_high_volume_vs_low_volume_equal_representation(self, bot_module):
+        """
+        High-volume user (100 msgs) and low-volume user (4 msgs) both get
+        their content represented — the high-volume user doesn't get 25x more
+        lines than the low-volume one.
+        """
+        max_cap = bot_module._WHO_IS_TODAY_MAX_MSGS_PER_USER
+        # Use zero-padded indices so "высокий_0001" is never a substring of "высокий_0010"
+        high_vol_msgs = [f"высокий_{i:04d}" for i in range(100)]
+        low_vol_msgs = [f"тихий_{i:04d}" for i in range(4)]
+        user_msgs = [
+            ("Болтун", high_vol_msgs),
+            ("Молчун", low_vol_msgs),
+        ]
+        result = bot_module._build_who_is_today_input("вопрос", user_msgs)
+
+        high_vol_included = sum(1 for m in high_vol_msgs if m in result)
+        low_vol_included = sum(1 for m in low_vol_msgs if m in result)
+
+        # High-volume user capped at max_cap; low-volume user fully included
+        assert high_vol_included <= max_cap
+        assert low_vol_included == 4
+
+    def test_message_count_shown_in_header(self, bot_module):
+        """Total message count for the day is displayed in each user's section header."""
+        user_msgs = [
+            ("Иван Иванов", ["сообщение"] * 42),
+            ("Мария Смирнова", ["текст"] * 3),
+        ]
+        result = bot_module._build_who_is_today_input("вопрос", user_msgs)
+        # Header should show total count even if some messages were capped
+        assert "42" in result
+        assert "3" in result
+
+    def test_message_count_shows_total_not_capped_count(self, bot_module):
+        """
+        The count in the header reflects the TOTAL messages sent today,
+        not the capped/trimmed count shown to the LLM.
+        """
+        max_cap = bot_module._WHO_IS_TODAY_MAX_MSGS_PER_USER
+        total = max_cap * 3  # well above cap
+        user_msgs = [("Болтун", ["msg"] * total)]
+        result = bot_module._build_who_is_today_input("вопрос", user_msgs)
+        assert str(total) in result
+
+    def test_user_order_randomised(self, bot_module):
+        """
+        User order is shuffled on each call (random.shuffle is invoked on the list).
+        We verify random.shuffle is called with a list built from user_messages.
+        """
+        user_msgs = [
+            ("Аня", ["привет"]),
+            ("Боря", ["пока"]),
+            ("Вася", ["ок"]),
+        ]
+        with patch("bot.random.shuffle") as mock_shuffle:
+            bot_module._build_who_is_today_input("вопрос", user_msgs)
+        mock_shuffle.assert_called_once()
+        shuffled_arg = mock_shuffle.call_args[0][0]
+        # The argument should be a list containing all users
+        assert len(shuffled_arg) == 3
+        names_in_arg = {name for name, _ in shuffled_arg}
+        assert names_in_arg == {"Аня", "Боря", "Вася"}
+
+    def test_user_with_few_messages_fully_included(self, bot_module):
+        """A user with fewer messages than the cap has ALL their messages included."""
+        max_cap = bot_module._WHO_IS_TODAY_MAX_MSGS_PER_USER
+        few_msgs = [f"сообщение {i}" for i in range(5)]
+        assert len(few_msgs) < max_cap
+        user_msgs = [("Молчун", few_msgs)]
+        result = bot_module._build_who_is_today_input("вопрос", user_msgs)
+        for m in few_msgs:
+            assert m in result
+
+    def test_exactly_cap_messages_all_included(self, bot_module):
+        """A user with exactly max cap messages has all of them included."""
+        max_cap = bot_module._WHO_IS_TODAY_MAX_MSGS_PER_USER
+        msgs = [f"msg_{i}" for i in range(max_cap)]
+        user_msgs = [("Пользователь", msgs)]
+        result = bot_module._build_who_is_today_input("вопрос", user_msgs)
+        for m in msgs:
+            assert m in result

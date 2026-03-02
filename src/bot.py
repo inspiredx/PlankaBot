@@ -45,6 +45,10 @@ EXPLAIN_PROMPT = _load_prompt("explain_prompt.txt")
 _WHO_IS_TODAY_CHAR_BUDGET = 31_000 * 3  # ~93,000 chars total for all users
 _WHO_IS_TODAY_MAX_OUTPUT_TOKENS = DEFAULT_MAX_OUTPUT_TOKENS
 
+# Maximum number of most-recent messages shown per user.
+# Caps representation so high-volume chatters don't crowd out quiet ones.
+_WHO_IS_TODAY_MAX_MSGS_PER_USER = 25
+
 GEESE_PLACEHOLDER_MESSAGES = [
     "Ну хорошо хорошо, сейчас подумаем, что можно сделать…",
     "Гуси уже в курсе. Собираем мудрость…",
@@ -212,9 +216,14 @@ def _build_who_is_today_input(question: str, user_messages: list[tuple[str, list
     """
     Build the LLM input string for кто сегодня.
 
-    Applies a fair token economy: the total character budget is divided equally
-    among all users. Within each user's quota the most-recent messages are kept
-    (reversed order, newest first) so that fresh context survives trimming.
+    Fair representation strategy:
+    - Each user is capped at _WHO_IS_TODAY_MAX_MSGS_PER_USER most-recent messages
+      so high-volume chatters don't crowd out quieter participants.
+    - The remaining per-user char budget is applied as a secondary safety trim
+      (handles unusually long individual messages).
+    - User order is randomised each call to eliminate LLM positional bias.
+    - The total message count for each user is shown so the LLM has explicit
+      context about participation level.
 
     Args:
         question: the raw question text (e.g. "больше всех похож на Цоя")
@@ -229,12 +238,21 @@ def _build_who_is_today_input(question: str, user_messages: list[tuple[str, list
     n_users = len(user_messages)
     per_user_budget = _WHO_IS_TODAY_CHAR_BUDGET // n_users
 
+    # Shuffle to remove alphabetical ordering and eliminate LLM positional bias
+    shuffled = list(user_messages)
+    random.shuffle(shuffled)
+
     sections = []
-    for name, msgs in user_messages:
-        # Take newest messages first until budget is exhausted, then reverse back
+    for name, msgs in shuffled:
+        total_count = len(msgs)
+
+        # Cap to most-recent N messages (primary fairness mechanism)
+        capped = msgs[-_WHO_IS_TODAY_MAX_MSGS_PER_USER:]
+
+        # Secondary trim: apply char budget (handles very long individual messages)
         selected: list[str] = []
         remaining = per_user_budget
-        for msg in reversed(msgs):
+        for msg in reversed(capped):
             if remaining <= 0:
                 break
             chunk = msg[:remaining]
@@ -243,7 +261,8 @@ def _build_who_is_today_input(question: str, user_messages: list[tuple[str, list
         selected.reverse()  # restore chronological order
 
         user_block = "\n".join(f"  — {m}" for m in selected)
-        sections.append(f"{name}:\n{user_block}")
+        header = f"{name} ({total_count} сообщ.):"
+        sections.append(f"{header}\n{user_block}")
 
     messages_block = "\n\n".join(sections)
     return (
