@@ -363,6 +363,146 @@ class TestMarkPlankDuplicate:
 
 
 # ---------------------------------------------------------------------------
+# mark_plank — increment (+N seconds added to existing)
+# ---------------------------------------------------------------------------
+
+class TestMarkPlankIncrement:
+    def test_returns_was_incremented_true_when_record_exists(self, db_module):
+        """mark_plank with is_increment=True returns was_incremented=True when record exists."""
+        pool = _make_mark_plank_pool([
+            _no_existing_user(),
+            [],
+            _count_result(1),   # count=1 → record exists
+            [],                  # increment update query
+        ])
+        db_module._pool = pool
+
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            result = db_module.mark_plank(111, "Иван Иванов", 20, is_increment=True)
+
+        assert result.is_new is False
+        assert result.was_updated is False
+        assert result.was_incremented is True
+
+    def test_increment_four_execute_calls(self, db_module):
+        """Increment path makes 4 execute calls: fetch user, upsert user, check count, update."""
+        execute_call_count = [0]
+
+        @contextmanager
+        def _counting_execute(query, params=None, commit_tx=False):
+            idx = execute_call_count[0]
+            execute_call_count[0] += 1
+            results = [_no_existing_user(), [], _count_result(1), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _counting_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            db_module.mark_plank(111, "Иван Иванов", 20, is_increment=True)
+
+        assert execute_call_count[0] == 4
+
+    def test_increment_passes_delta_param(self, db_module):
+        """Increment UPDATE query receives $delta parameter (not $actual_seconds)."""
+        captured_params = []
+
+        @contextmanager
+        def _capturing_execute(query, params=None, commit_tx=False):
+            captured_params.append((query, params or {}))
+            idx = len(captured_params) - 1
+            results = [_no_existing_user(), [], _count_result(1), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _capturing_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            db_module.mark_plank(111, "Иван Иванов", 20, is_increment=True)
+
+        # 4th call (index 3) is the increment UPDATE
+        update_query, update_params = captured_params[3]
+        assert "$delta" in update_params
+        assert update_params["$delta"] == 20
+        assert "COALESCE" in update_query
+
+    def test_increment_commit_tx_true(self, db_module):
+        """The increment execute call uses commit_tx=True."""
+        commit_tx_values = []
+
+        @contextmanager
+        def _tracking_execute(query, params=None, commit_tx=False):
+            commit_tx_values.append(commit_tx)
+            idx = len(commit_tx_values) - 1
+            results = [_no_existing_user(), [], _count_result(1), []]
+            yield iter(results[idx] if idx < len(results) else [])
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+            mock_tx.execute = _tracking_execute
+            return callee(mock_session)
+
+        pool = MagicMock()
+        pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = pool
+
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            db_module.mark_plank(111, "Иван Иванов", 20, is_increment=True)
+
+        assert commit_tx_values == [False, False, False, True]
+
+    def test_increment_new_record_inserts_as_is_new(self, db_module):
+        """When is_increment=True but no existing record, inserts new record (is_new=True)."""
+        pool = _make_mark_plank_pool([
+            _no_existing_user(),
+            [],
+            _count_result(0),   # no record yet
+            [],                  # insert
+        ])
+        db_module._pool = pool
+
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            result = db_module.mark_plank(111, "Иван Иванов", 20, is_increment=True)
+
+        assert result.is_new is True
+        assert result.was_incremented is False
+
+    def test_no_increment_when_is_increment_false(self, db_module):
+        """When is_increment=False and record exists with seconds, was_updated=True (not incremented)."""
+        pool = _make_mark_plank_pool([
+            _no_existing_user(),
+            [],
+            _count_result(1),
+            [],
+        ])
+        db_module._pool = pool
+
+        with patch.object(db_module, "get_today_date_str", return_value="2026-03-01"):
+            result = db_module.mark_plank(111, "Иван Иванов", 20, is_increment=False)
+
+        assert result.was_updated is True
+        assert result.was_incremented is False
+
+
+# ---------------------------------------------------------------------------
 # mark_plank — update (already done, new seconds provided)
 # ---------------------------------------------------------------------------
 
@@ -468,6 +608,21 @@ class TestMarkPlankUpdate:
 
         # First 3: False, False, False; 4th (update): True
         assert commit_tx_values == [False, False, False, True]
+
+
+# ---------------------------------------------------------------------------
+# PlankMarkResult — default field
+# ---------------------------------------------------------------------------
+
+class TestPlankMarkResultDefault:
+    def test_was_incremented_defaults_to_false(self, db_module):
+        """was_incremented field defaults to False for backward compatibility."""
+        result = db_module.PlankMarkResult(is_new=True, was_updated=False)
+        assert result.was_incremented is False
+
+    def test_was_incremented_can_be_set_true(self, db_module):
+        result = db_module.PlankMarkResult(is_new=False, was_updated=False, was_incremented=True)
+        assert result.was_incremented is True
 
 
 # ---------------------------------------------------------------------------

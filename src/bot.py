@@ -114,14 +114,23 @@ def handle_planka(msg, text: str):
     name = get_user_name(user_id)
 
     actual_seconds = None
+    is_increment = False
     parts = text.strip().split()
     if len(parts) >= 2 and parts[0].lower() == "планка":
-        try:
-            actual_seconds = int(parts[1])
-        except ValueError:
-            actual_seconds = None
+        raw_val = parts[1]
+        if raw_val.startswith("+"):
+            try:
+                actual_seconds = int(raw_val[1:])
+                is_increment = True
+            except ValueError:
+                actual_seconds = None
+        else:
+            try:
+                actual_seconds = int(raw_val)
+            except ValueError:
+                actual_seconds = None
 
-    result = db.mark_plank(user_id, name, actual_seconds)
+    result = db.mark_plank(user_id, name, actual_seconds, is_increment=is_increment)
     today_str = db.get_today_date_str()
 
     if result.is_new:
@@ -129,6 +138,8 @@ def handle_planka(msg, text: str):
             send_message(peer_id, f"{today_str} планка сделана ({actual_seconds})")
         else:
             send_message(peer_id, f"{today_str} планка сделана")
+    elif result.was_incremented:
+        send_message(peer_id, f"планка увеличена (+{actual_seconds}) 💪")
     elif result.was_updated:
         send_message(peer_id, f"планка обновлена ({actual_seconds}) 💪")
     else:
@@ -166,6 +177,8 @@ def handle_guide(msg):
         "• планка — отметить, что ты сделал(а) планку сегодня.\n"
         "• планка X — отметить планку с указанием числа секунд X.\n"
         "  Если планка уже записана, значение X обновит результат.\n"
+        "• планка +X — добавить X секунд к уже записанному времени.\n"
+        "  Удобно, если делал(а) планку несколькими подходами.\n"
         "• стата — показать, кто сегодня сделал планку и кто нет.\n"
         "• гайд — показать это сообщение.\n"
         "• ебать гусей [контекст] — мудрая история про гусей и планку.\n"

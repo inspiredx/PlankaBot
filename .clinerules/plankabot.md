@@ -14,7 +14,8 @@ PlankaBot is a VK group chat bot that tracks daily plank exercises for a group o
 ## Bot Commands (Russian)
 All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000000):
 - `планка` — record today's plank for the user (no value)
-- `планка X` — record plank with a numeric value X (actual seconds); if a record already exists for today, **updates** `actual_seconds` in place
+- `планка X` — record plank with a numeric value X (actual seconds); if a record already exists for today, **replaces** `actual_seconds` in place
+- `планка +X` — add X seconds to today's existing `actual_seconds` (useful for multiple sets); if no record yet, inserts with value X
 - `стата` — show today's plank stats: who did it and who hasn't (today = UTC+3 by default)
 - `гайд` — show command help
 - `ебать гусей [context]` — generate a goose-wisdom story via LLM
@@ -53,13 +54,14 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - **No context → hint**: if `кто сегодня` is sent without a question, a usage hint is returned immediately without hitting the DB or LLM.
 
 ## Key Design Decisions
-- **`PlankMarkResult(is_new, was_updated)`**: `mark_plank` returns a NamedTuple instead of bool; `is_new=True` → first insert, `was_updated=True` → existing record's `actual_seconds` updated, both False → no-op duplicate
+- **`PlankMarkResult(is_new, was_updated, was_incremented=False)`**: `mark_plank` returns a NamedTuple; `is_new=True` → first insert, `was_updated=True` → existing record's `actual_seconds` replaced, `was_incremented=True` → seconds added to existing value via `COALESCE(actual_seconds, 0) + delta`, all False → no-op duplicate
 - **Explicit YDB transactions**: all writes use `SerializableReadWrite` tx with explicit begin/commit
 - **Session pool**: initialized once at module level (outside handler) to survive warm invocations
 - **Auth**: `ydb.iam.MetadataUrlCredentials()` in cloud; no local YDB auth (tests use mocks)
 - **Timezone**: `PLANK_TIMEZONE` env var (default `Europe/Moscow`) for day boundary calculation
 - **Duplicate detection**: if user already has a `plank_records` row for today and no new value → return "already done" (no stale value echoed)
 - **Auto-update**: if user sends `планка X` and already has a record for today → UPDATE `actual_seconds`, return "планка обновлена (X) 💪"
+- **Increment**: if user sends `планка +X` and already has a record for today → UPDATE `actual_seconds = COALESCE(actual_seconds, 0) + X`, return "планка увеличена (+X) 💪"; if no record yet, inserts with value X
 - **Stats**: `стата` queries only today's records (not all-time)
 - **`actual_seconds` stored as Int32**: the numeric value from `планка X`; NULL if no value given; overwritten on re-submission with a value
 

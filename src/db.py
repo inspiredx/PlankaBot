@@ -94,25 +94,38 @@ def _get_pool() -> ydb.QuerySessionPool:
 
 class PlankMarkResult(NamedTuple):
     """Result of mark_plank."""
-    is_new: bool       # True if a new record was inserted
-    was_updated: bool  # True if an existing record's actual_seconds was updated
+    is_new: bool              # True if a new record was inserted
+    was_updated: bool         # True if an existing record's actual_seconds was replaced
+    was_incremented: bool = False  # True when +N seconds were added to an existing value
 
 
-def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> PlankMarkResult:
+def mark_plank(
+    user_id: int,
+    name: str,
+    actual_seconds: Optional[int],
+    is_increment: bool = False,
+) -> PlankMarkResult:
     """
     Record today's plank for user_id.
 
     Returns PlankMarkResult:
-      - is_new=True, was_updated=False  — first plank of the day inserted
-      - is_new=False, was_updated=True  — existing record updated with new actual_seconds
-      - is_new=False, was_updated=False — already done, nothing to update
+      - is_new=True, was_updated=False, was_incremented=False  — first plank inserted
+      - is_new=False, was_updated=True, was_incremented=False  — existing record replaced
+      - is_new=False, was_updated=False, was_incremented=True  — seconds added to existing
+      - is_new=False, was_updated=False, was_incremented=False — already done, nothing to do
+
+    When is_increment=True and actual_seconds=N:
+      - If no record yet: inserts with actual_seconds=N (is_new=True)
+      - If record exists, actual_seconds already set: adds N to the stored value
+      - If record exists, actual_seconds is NULL: sets it to N
 
     Uses an explicit SerializableReadWrite transaction:
       1. Read existing user row (to preserve is_bot_admin / created_at)
       2. Upsert user (create or update name + last_activity)
       3. Check for existing plank_records row for today
       4a. If none, insert it
-      4b. If exists and actual_seconds provided, update it
+      4b. If exists and actual_seconds provided (replace mode), update it
+      4c. If exists and is_increment mode, add seconds to existing value
     """
     pool = _get_pool()
     today = get_today_date_str()
@@ -187,8 +200,29 @@ def mark_plank(user_id: int, name: str, actual_seconds: Optional[int]) -> PlankM
                 count = rows[0].cnt if rows else 0
 
             if count > 0:
-                if actual_seconds is not None:
-                    # Step 4b: Update existing record with new actual_seconds
+                if actual_seconds is not None and is_increment:
+                    # Step 4c: Add seconds to existing value (COALESCE handles NULL → treat as 0)
+                    with tx.execute(
+                        """
+                        DECLARE $user_id AS Int64;
+                        DECLARE $plank_date AS Utf8;
+                        DECLARE $delta AS Int32;
+
+                        UPDATE plank_records
+                        SET actual_seconds = COALESCE(actual_seconds, 0) + $delta
+                        WHERE user_id = $user_id AND plank_date = $plank_date;
+                        """,
+                        {
+                            "$user_id": user_id,
+                            "$plank_date": today,
+                            "$delta": actual_seconds,
+                        },
+                        commit_tx=True,
+                    ) as _:
+                        pass
+                    return PlankMarkResult(is_new=False, was_updated=False, was_incremented=True)
+                elif actual_seconds is not None:
+                    # Step 4b: Update existing record with new actual_seconds (replace mode)
                     with tx.execute(
                         """
                         DECLARE $user_id AS Int64;

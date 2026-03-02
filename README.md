@@ -287,7 +287,8 @@ pytest tests/ -v
 | Command | Description |
 |---|---|
 | `планка` | Record today's plank (no duration) |
-| `планка X` | Record plank with X seconds; updates if already recorded today |
+| `планка X` | Record plank with X seconds; replaces if already recorded today |
+| `планка +X` | Add X seconds to today's existing plank time (multiple sets); inserts if no record yet |
 | `стата` | Show today's plank stats: who did it, who hasn't |
 | `гайд` | Show command help |
 | `ебать гусей [context]` | Generate a goose-wisdom story via LLM |

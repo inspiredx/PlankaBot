@@ -92,6 +92,12 @@ class TestProcessMessageRouting:
             bot_module.process_message(make_msg("Планка 60"))
         mock_fn.assert_called_once()
 
+    def test_routes_planka_with_increment_value(self, bot_module):
+        """'планка +20' should route to handle_planka."""
+        with patch.object(bot_module, "handle_planka") as mock_fn:
+            bot_module.process_message(make_msg("планка +20"))
+        mock_fn.assert_called_once()
+
     def test_ignores_planka_with_extra_args(self, bot_module):
         """'планка 60 sec extra' has 4 parts — should not be handled."""
         with patch.object(bot_module, "handle_planka") as mock_fn:
@@ -118,6 +124,7 @@ class TestHandleGuide:
         assert args[0] == msg["peer_id"]
         assert "планка" in args[1]
         assert "стата" in args[1]
+        assert "+X" in args[1] or "+" in args[1]
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +295,7 @@ class TestHandlePlanka:
         text = mock_send.call_args[0][1]
         assert "планка сделана" in text
         assert "(60)" in text
-        mock_mark.assert_called_once_with(111, "Иван Иванов", 60)
+        mock_mark.assert_called_once_with(111, "Иван Иванов", 60, is_increment=False)
 
     def test_planka_duplicate_no_value(self, bot_module, db_module):
         """Already planked today, no new value → 'уже сделана' (no seconds shown)."""
@@ -344,7 +351,7 @@ class TestHandlePlanka:
              patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
              patch.object(bot_module, "send_message"):
             bot_module.handle_planka(msg, "планка abc")
-        mock_mark.assert_called_once_with(111, "Иван Иванов", None)
+        mock_mark.assert_called_once_with(111, "Иван Иванов", None, is_increment=False)
 
     def test_planka_passes_user_id_and_name(self, bot_module, db_module):
         """user_id and name are correctly passed to db.mark_plank."""
@@ -354,7 +361,86 @@ class TestHandlePlanka:
              patch.object(bot_module, "get_user_name", return_value="Тест Пользователь"), \
              patch.object(bot_module, "send_message"):
             bot_module.handle_planka(msg, "планка")
-        mock_mark.assert_called_once_with(999, "Тест Пользователь", None)
+        mock_mark.assert_called_once_with(999, "Тест Пользователь", None, is_increment=False)
+
+    def test_planka_increment_syntax_parsed(self, bot_module, db_module):
+        """'планка +20' parses is_increment=True and actual_seconds=20."""
+        msg = make_msg("планка +20")
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)) as mock_mark, \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_planka(msg, "планка +20")
+        mock_mark.assert_called_once_with(111, "Иван Иванов", 20, is_increment=True)
+
+    def test_planka_increment_new_record_shows_done_message(self, bot_module, db_module):
+        """'планка +20' on new record (is_new=True) → success message with seconds."""
+        msg = make_msg("планка +20")
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_planka(msg, "планка +20")
+        text = mock_send.call_args[0][1]
+        assert "планка сделана" in text
+        assert "(20)" in text
+
+    def test_planka_increment_existing_record_shows_incremented_message(self, bot_module, db_module):
+        """'планка +20' on existing record (was_incremented=True) → 'планка увеличена (+20)'."""
+        msg = make_msg("планка +20")
+        incremented_result = db_module.PlankMarkResult(is_new=False, was_updated=False, was_incremented=True)
+        with patch.object(db_module, "mark_plank", return_value=incremented_result), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_planka(msg, "планка +20")
+        text = mock_send.call_args[0][1]
+        assert "увеличена" in text
+        assert "+20" in text
+
+    def test_planka_increment_message_does_not_say_already_done(self, bot_module, db_module):
+        """'планка +20' (was_incremented) message must NOT say 'уже сделана'."""
+        msg = make_msg("планка +20")
+        incremented_result = db_module.PlankMarkResult(is_new=False, was_updated=False, was_incremented=True)
+        with patch.object(db_module, "mark_plank", return_value=incremented_result), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_planka(msg, "планка +20")
+        text = mock_send.call_args[0][1]
+        assert "уже сделана" not in text
+
+    def test_planka_increment_message_does_not_say_обновлена(self, bot_module, db_module):
+        """'планка +20' (was_incremented) message must NOT say 'обновлена'."""
+        msg = make_msg("планка +20")
+        incremented_result = db_module.PlankMarkResult(is_new=False, was_updated=False, was_incremented=True)
+        with patch.object(db_module, "mark_plank", return_value=incremented_result), \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_planka(msg, "планка +20")
+        text = mock_send.call_args[0][1]
+        assert "обновлена" not in text
+
+    def test_planka_increment_invalid_value_treated_as_no_value(self, bot_module, db_module):
+        """'планка +abc' → actual_seconds=None, is_increment=False."""
+        msg = make_msg("планка +abc")
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)) as mock_mark, \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_planka(msg, "планка +abc")
+        mock_mark.assert_called_once_with(111, "Иван Иванов", None, is_increment=False)
+
+    def test_planka_normal_value_is_not_increment(self, bot_module, db_module):
+        """'планка 60' passes is_increment=False."""
+        msg = make_msg("планка 60")
+        with patch.object(db_module, "mark_plank", return_value=self._new_result(db_module)) as mock_mark, \
+             patch.object(db_module, "get_today_date_str", return_value="2026-03-01"), \
+             patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_planka(msg, "планка 60")
+        mock_mark.assert_called_once_with(111, "Иван Иванов", 60, is_increment=False)
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +511,7 @@ class TestProcessMessageTracking:
         # Lowercase — canonical forms
         "планка",
         "планка 60",
+        "планка +20",
         "стата",
         "гайд",
         "ебать гусей",
@@ -435,8 +522,10 @@ class TestProcessMessageTracking:
         # Mixed / upper case — verifies exclusion is case-insensitive
         "Планка",
         "Планка 60",
+        "Планка +20",
         "ПЛАНКА",
         "ПЛАНКА 120",
+        "ПЛАНКА +30",
         "Стата",
         "СТАТА",
         "Гайд",
