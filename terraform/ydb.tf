@@ -74,7 +74,7 @@ resource "yandex_ydb_table" "plank_records" {
 
   ttl {
     column_name     = "created_at"
-    expire_interval = "P90D"
+    expire_interval = "P365D"
   }
 }
 
