@@ -215,7 +215,7 @@ def mark_plank(
                         {
                             "$user_id": user_id,
                             "$plank_date": today,
-                            "$delta": actual_seconds,
+                            "$delta": (actual_seconds, ydb.PrimitiveType.Int32),
                         },
                         commit_tx=True,
                     ) as _:

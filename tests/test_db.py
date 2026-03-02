@@ -439,7 +439,8 @@ class TestMarkPlankIncrement:
         # 4th call (index 3) is the increment UPDATE
         update_query, update_params = captured_params[3]
         assert "$delta" in update_params
-        assert update_params["$delta"] == 20
+        # $delta is passed as a (value, PrimitiveType.Int32) tuple for explicit typing
+        assert update_params["$delta"][0] == 20
         assert "COALESCE" in update_query
 
     def test_increment_commit_tx_true(self, db_module):
