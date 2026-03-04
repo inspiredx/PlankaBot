@@ -78,6 +78,45 @@ resource "yandex_ydb_table" "plank_records" {
   }
 }
 
+resource "yandex_ydb_table" "story_turns" {
+  path              = "story_turns"
+  connection_string = yandex_ydb_database_serverless.plankabot.ydb_full_endpoint
+
+  column {
+    name     = "peer_id"
+    type     = "Int64"
+    not_null = true
+  }
+  column {
+    name     = "turn_index"
+    type     = "Int32"
+    not_null = true
+  }
+  column {
+    name     = "role"
+    type     = "Utf8"
+    not_null = true
+  }
+  column {
+    name     = "content"
+    type     = "Utf8"
+    not_null = true
+  }
+  column {
+    name     = "created_at"
+    type     = "Timestamp"
+    not_null = true
+  }
+
+  # PK: (peer_id, turn_index) — one row per turn per chat, naturally ordered
+  primary_key = ["peer_id", "turn_index"]
+
+  ttl {
+    column_name     = "created_at"
+    expire_interval = "P1D"
+  }
+}
+
 resource "yandex_ydb_table" "chat_messages" {
   path              = "chat_messages"
   connection_string = yandex_ydb_database_serverless.plankabot.ydb_full_endpoint

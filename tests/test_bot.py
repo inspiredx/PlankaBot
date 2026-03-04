@@ -1097,3 +1097,455 @@ class TestBuildWhoIsTodayInput:
         result = bot_module._build_who_is_today_input("вопрос", user_msgs)
         for m in msgs:
             assert m in result
+
+
+# ---------------------------------------------------------------------------
+# _trim_story_context
+# ---------------------------------------------------------------------------
+
+class TestTrimStoryContext:
+    def test_single_turn_returned_as_is(self, bot_module):
+        turns = [{"role": "user", "content": "про котов"}]
+        result = bot_module._trim_story_context(turns)
+        assert result == turns
+
+    def test_empty_turns_returned_as_is(self, bot_module):
+        result = bot_module._trim_story_context([])
+        assert result == []
+
+    def test_always_keeps_first_turn(self, bot_module):
+        """First turn is always preserved regardless of budget."""
+        first = {"role": "user", "content": "начать историю"}
+        # Many subsequent turns that exceed any reasonable budget
+        rest = [{"role": "assistant" if i % 2 else "user", "content": "x" * 1000} for i in range(200)]
+        turns = [first] + rest
+        result = bot_module._trim_story_context(turns)
+        assert result[0] == first
+
+    def test_fits_all_turns_when_within_budget(self, bot_module):
+        """When total chars fit in budget, all turns are returned."""
+        turns = [
+            {"role": "user", "content": "начать историю про котов"},
+            {"role": "assistant", "content": "Жил-был кот"},
+            {"role": "user", "content": "кот любил рыбу"},
+            {"role": "assistant", "content": "И рыба отвечала взаимностью"},
+        ]
+        result = bot_module._trim_story_context(turns)
+        assert result == turns
+
+    def test_drops_middle_turns_when_over_budget(self, bot_module):
+        """When over budget, middle turns are dropped but first and most-recent are kept."""
+        first = {"role": "user", "content": "начать историю"}
+        # Fill budget with large middle turns
+        middle = [{"role": "user", "content": "A" * 20_000} for _ in range(10)]
+        recent = [{"role": "user", "content": "самое новое сообщение"}]
+        turns = [first] + middle + recent
+
+        result = bot_module._trim_story_context(turns)
+
+        assert result[0] == first
+        assert recent[0] in result
+
+    def test_result_in_chronological_order(self, bot_module):
+        """Returned turns must be in chronological (ascending) order."""
+        turns = [
+            {"role": "user", "content": "начать"},
+            {"role": "assistant", "content": "один"},
+            {"role": "user", "content": "два"},
+            {"role": "assistant", "content": "три"},
+        ]
+        result = bot_module._trim_story_context(turns)
+        # Verify each returned turn exists in original and is in order
+        prev_idx = -1
+        for turn in result:
+            idx = turns.index(turn)
+            assert idx > prev_idx
+            prev_idx = idx
+
+    def test_budget_constant_is_positive(self, bot_module):
+        assert bot_module._STORY_CHAR_BUDGET > 0
+
+    def test_most_recent_turns_kept_when_over_budget(self, bot_module):
+        """When trimming, the most RECENT turns (excluding first) survive."""
+        first = {"role": "user", "content": "начать"}
+        old_turn = {"role": "user", "content": "старое_сообщение_1234"}
+        new_turn = {"role": "assistant", "content": "новое_сообщение_5678"}
+        # Fill between old and new with huge content
+        filler = [{"role": "user", "content": "Х" * 30_000} for _ in range(5)]
+        turns = [first, old_turn] + filler + [new_turn]
+
+        result = bot_module._trim_story_context(turns)
+
+        assert new_turn in result
+        # old_turn may or may not be there — but new_turn must be
+
+
+# ---------------------------------------------------------------------------
+# handle_start_story
+# ---------------------------------------------------------------------------
+
+class TestHandleStartStory:
+    def _make_msg(self, text="начать историю про котов", peer_id=2000000001, from_id=111):
+        return {"text": text, "peer_id": peer_id, "from_id": from_id}
+
+    def test_clears_existing_story_on_start(self, bot_module, db_module):
+        """handle_start_story clears any existing story first."""
+        msg = self._make_msg()
+        with patch.object(db_module, "story_clear") as mock_clear, \
+             patch.object(db_module, "story_append_turns"), \
+             patch.object(bot_module, "_call_story_llm", return_value="Жил-был кот"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_start_story(msg, "начать историю про котов")
+        mock_clear.assert_called_once_with(2000000001)
+
+    def test_appends_first_user_turn_then_bot_turn(self, bot_module, db_module):
+        """Two story_append_turns calls: first with user turn, then with bot turn."""
+        msg = self._make_msg()
+        calls = []
+        with patch.object(db_module, "story_clear"), \
+             patch.object(db_module, "story_append_turns", side_effect=lambda p, t: calls.append(t)), \
+             patch.object(bot_module, "_call_story_llm", return_value="Жил-был кот"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_start_story(msg, "начать историю про котов")
+        assert len(calls) == 2
+        assert calls[0][0]["role"] == "user"
+        assert calls[1][0]["role"] == "assistant"
+        assert calls[1][0]["content"] == "Жил-был кот"
+
+    def test_sends_placeholder_then_opening_line(self, bot_module, db_module):
+        """Two send_message calls: placeholder first, opening line second."""
+        msg = self._make_msg()
+        with patch.object(db_module, "story_clear"), \
+             patch.object(db_module, "story_append_turns"), \
+             patch.object(bot_module, "_call_story_llm", return_value="Жил-был кот"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_start_story(msg, "начать историю про котов")
+        assert mock_send.call_count == 2
+        placeholder = mock_send.call_args_list[0][0][1]
+        assert placeholder in bot_module.STORY_START_PLACEHOLDER_MESSAGES
+        opening = mock_send.call_args_list[1][0][1]
+        assert opening == "Жил-был кот"
+
+    def test_extracts_theme_as_user_prompt(self, bot_module, db_module):
+        """Theme after 'начать историю' is used as the user turn content."""
+        msg = self._make_msg("начать историю про котов")
+        captured_turns = []
+        with patch.object(db_module, "story_clear"), \
+             patch.object(db_module, "story_append_turns", side_effect=lambda p, t: captured_turns.extend(t)), \
+             patch.object(bot_module, "_call_story_llm", return_value="история"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_start_story(msg, "начать историю про котов")
+        first_user_turn = captured_turns[0]
+        assert first_user_turn["content"] == "про котов"
+
+    def test_no_theme_uses_default_prompt(self, bot_module, db_module):
+        """'начать историю' without theme uses a default prompt."""
+        msg = self._make_msg("начать историю")
+        captured_turns = []
+        with patch.object(db_module, "story_clear"), \
+             patch.object(db_module, "story_append_turns", side_effect=lambda p, t: captured_turns.extend(t)), \
+             patch.object(bot_module, "_call_story_llm", return_value="история"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_start_story(msg, "начать историю")
+        first_user_turn = captured_turns[0]
+        assert first_user_turn["content"]  # non-empty
+
+    def test_llm_failure_sends_error(self, bot_module, db_module):
+        """LLM failure during story start → placeholder sent, then error message."""
+        msg = self._make_msg()
+        with patch.object(db_module, "story_clear"), \
+             patch.object(db_module, "story_append_turns"), \
+             patch.object(bot_module, "_call_story_llm", side_effect=RuntimeError("api error")), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_start_story(msg, "начать историю про котов")
+        # placeholder + error message
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "не удалось" in error_text.lower() or "попробуй" in error_text.lower()
+
+    def test_db_failure_on_first_append_sends_error(self, bot_module, db_module):
+        """If story_append_turns raises on first call, user gets error message (after placeholder)."""
+        msg = self._make_msg()
+        with patch.object(db_module, "story_clear"), \
+             patch.object(db_module, "story_append_turns", side_effect=RuntimeError("db down")), \
+             patch.object(bot_module, "_call_story_llm") as mock_llm, \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_start_story(msg, "начать историю про котов")
+        mock_llm.assert_not_called()
+        # placeholder + error message
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "не удалось" in error_text.lower() or "попробуй" in error_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# handle_continue_story
+# ---------------------------------------------------------------------------
+
+class TestHandleContinueStory:
+    def _make_msg(self, text="люблю какать", peer_id=2000000001, from_id=111):
+        return {"text": text, "peer_id": peer_id, "from_id": from_id}
+
+    def _existing_turns(self):
+        return [
+            {"role": "user", "content": "про котов"},
+            {"role": "assistant", "content": "Жил-был кот"},
+        ]
+
+    def test_loads_turns_from_db(self, bot_module, db_module):
+        msg = self._make_msg()
+        with patch.object(db_module, "story_get_turns", return_value=self._existing_turns()) as mock_get, \
+             patch.object(db_module, "story_append_turns"), \
+             patch.object(bot_module, "_call_story_llm", return_value="продолжение"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_continue_story(msg, "люблю какать")
+        mock_get.assert_called_once_with(2000000001)
+
+    def test_appends_user_and_bot_turns(self, bot_module, db_module):
+        """Both user message and bot reply are appended to DB."""
+        msg = self._make_msg()
+        appended = []
+        with patch.object(db_module, "story_get_turns", return_value=self._existing_turns()), \
+             patch.object(db_module, "story_append_turns", side_effect=lambda p, t: appended.extend(t)), \
+             patch.object(bot_module, "_call_story_llm", return_value="продолжение"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_continue_story(msg, "люблю какать")
+        assert len(appended) == 2
+        assert appended[0] == {"role": "user", "content": "люблю какать"}
+        assert appended[1] == {"role": "assistant", "content": "продолжение"}
+
+    def test_sends_placeholder_then_continuation_to_chat(self, bot_module, db_module):
+        """Two send_message calls: placeholder first, continuation second."""
+        msg = self._make_msg()
+        with patch.object(db_module, "story_get_turns", return_value=self._existing_turns()), \
+             patch.object(db_module, "story_append_turns"), \
+             patch.object(bot_module, "_call_story_llm", return_value="кот задумался"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_continue_story(msg, "люблю какать")
+        assert mock_send.call_count == 2
+        placeholder = mock_send.call_args_list[0][0][1]
+        assert placeholder in bot_module.STORY_CONTINUE_PLACEHOLDER_MESSAGES
+        continuation = mock_send.call_args_list[1][0][1]
+        assert continuation == "кот задумался"
+
+    def test_no_action_when_no_turns(self, bot_module, db_module):
+        """If story expired (no turns), nothing is sent."""
+        msg = self._make_msg()
+        with patch.object(db_module, "story_get_turns", return_value=[]), \
+             patch.object(bot_module, "_call_story_llm") as mock_llm, \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_continue_story(msg, "люблю какать")
+        mock_llm.assert_not_called()
+        mock_send.assert_not_called()
+
+    def test_llm_failure_sends_error(self, bot_module, db_module):
+        """LLM failure → placeholder sent, then error message."""
+        msg = self._make_msg()
+        with patch.object(db_module, "story_get_turns", return_value=self._existing_turns()), \
+             patch.object(db_module, "story_append_turns"), \
+             patch.object(bot_module, "_call_story_llm", side_effect=RuntimeError("api fail")), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_continue_story(msg, "люблю какать")
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "прервалась" in error_text.lower() or "попробуй" in error_text.lower()
+
+    def test_new_user_turn_added_to_context(self, bot_module, db_module):
+        """The new user message is included in the turns passed to LLM."""
+        msg = self._make_msg()
+        captured_turns = []
+        with patch.object(db_module, "story_get_turns", return_value=self._existing_turns()), \
+             patch.object(db_module, "story_append_turns"), \
+             patch.object(bot_module, "_call_story_llm",
+                          side_effect=lambda t: captured_turns.__iadd__(t) or "ok"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_continue_story(msg, "люблю какать")
+        contents = [t["content"] for t in captured_turns]
+        assert "люблю какать" in contents
+
+
+# ---------------------------------------------------------------------------
+# handle_end_story
+# ---------------------------------------------------------------------------
+
+class TestHandleEndStory:
+    def _make_msg(self, peer_id=2000000001, from_id=111):
+        return {"text": "кончить историю", "peer_id": peer_id, "from_id": from_id}
+
+    def _existing_turns(self):
+        return [
+            {"role": "user", "content": "про котов"},
+            {"role": "assistant", "content": "Жил-был кот"},
+            {"role": "user", "content": "люблю какать"},
+            {"role": "assistant", "content": "кот задумался"},
+        ]
+
+    def test_informs_user_when_no_active_story(self, bot_module, db_module):
+        msg = self._make_msg()
+        with patch.object(db_module, "story_is_active", return_value=False), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_end_story(msg)
+        mock_send.assert_called_once()
+        text = mock_send.call_args[0][1]
+        assert "нет" in text.lower() or "начни" in text.lower()
+
+    def test_sends_finale_when_story_active(self, bot_module, db_module):
+        msg = self._make_msg()
+        with patch.object(db_module, "story_is_active", return_value=True), \
+             patch.object(db_module, "story_get_turns", return_value=self._existing_turns()), \
+             patch.object(db_module, "story_clear"), \
+             patch.object(bot_module, "_call_story_llm", return_value="И жили они долго"), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_end_story(msg)
+        mock_send.assert_called_once_with(2000000001, "И жили они долго")
+
+    def test_clears_story_after_finale(self, bot_module, db_module):
+        msg = self._make_msg()
+        with patch.object(db_module, "story_is_active", return_value=True), \
+             patch.object(db_module, "story_get_turns", return_value=self._existing_turns()), \
+             patch.object(db_module, "story_clear") as mock_clear, \
+             patch.object(bot_module, "_call_story_llm", return_value="финал"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_end_story(msg)
+        mock_clear.assert_called_once_with(2000000001)
+
+    def test_wrap_up_signal_in_llm_context(self, bot_module, db_module):
+        """'кончить историю' user turn is appended to context sent to LLM."""
+        msg = self._make_msg()
+        captured = []
+        with patch.object(db_module, "story_is_active", return_value=True), \
+             patch.object(db_module, "story_get_turns", return_value=self._existing_turns()), \
+             patch.object(db_module, "story_clear"), \
+             patch.object(bot_module, "_call_story_llm",
+                          side_effect=lambda t: captured.__iadd__(t) or "финал"), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_end_story(msg)
+        end_turn = {"role": "user", "content": "кончить историю"}
+        assert end_turn in captured
+
+    def test_llm_failure_sends_error(self, bot_module, db_module):
+        msg = self._make_msg()
+        with patch.object(db_module, "story_is_active", return_value=True), \
+             patch.object(db_module, "story_get_turns", return_value=self._existing_turns()), \
+             patch.object(db_module, "story_clear"), \
+             patch.object(bot_module, "_call_story_llm", side_effect=RuntimeError("api fail")), \
+             patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_end_story(msg)
+        mock_send.assert_called_once()
+        text = mock_send.call_args[0][1]
+        assert "не удалось" in text.lower() or "попробуй" in text.lower()
+
+    def test_story_not_cleared_on_llm_failure(self, bot_module, db_module):
+        """If LLM fails, story_clear should NOT be called (story persists for retry)."""
+        msg = self._make_msg()
+        with patch.object(db_module, "story_is_active", return_value=True), \
+             patch.object(db_module, "story_get_turns", return_value=self._existing_turns()), \
+             patch.object(db_module, "story_clear") as mock_clear, \
+             patch.object(bot_module, "_call_story_llm", side_effect=RuntimeError("api fail")), \
+             patch.object(bot_module, "send_message"):
+            bot_module.handle_end_story(msg)
+        mock_clear.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# process_message — story mode routing
+# ---------------------------------------------------------------------------
+
+class TestProcessMessageStoryRouting:
+    def test_routes_nachat_istoriyu(self, bot_module):
+        """'начать историю' is routed to handle_start_story."""
+        msg = make_msg("начать историю про котов")
+        with patch.object(bot_module, "handle_start_story") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"):
+            bot_module.process_message(msg)
+        mock_fn.assert_called_once()
+
+    def test_routes_konchit_istoriyu(self, bot_module):
+        """'кончить историю' is routed to handle_end_story."""
+        msg = make_msg("кончить историю")
+        with patch.object(bot_module, "handle_end_story") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"):
+            bot_module.process_message(msg)
+        mock_fn.assert_called_once()
+
+    def test_organic_message_continues_active_story(self, bot_module, db_module):
+        """Organic message while story is active triggers handle_continue_story."""
+        msg = make_msg("люблю какать")
+        msg["conversation_message_id"] = 10
+        with patch.object(bot_module, "get_user_name", return_value="Иван"), \
+             patch.object(db_module, "ensure_user"), \
+             patch.object(db_module, "save_message"), \
+             patch.object(db_module, "story_is_active", return_value=True), \
+             patch.object(bot_module, "handle_continue_story") as mock_fn:
+            bot_module.process_message(msg)
+        mock_fn.assert_called_once()
+
+    def test_organic_message_no_continuation_when_story_inactive(self, bot_module, db_module):
+        """Organic message when no story active → handle_continue_story NOT called."""
+        msg = make_msg("люблю какать")
+        msg["conversation_message_id"] = 10
+        with patch.object(bot_module, "get_user_name", return_value="Иван"), \
+             patch.object(db_module, "ensure_user"), \
+             patch.object(db_module, "save_message"), \
+             patch.object(db_module, "story_is_active", return_value=False), \
+             patch.object(bot_module, "handle_continue_story") as mock_fn:
+            bot_module.process_message(msg)
+        mock_fn.assert_not_called()
+
+    def test_bot_commands_do_not_continue_story(self, bot_module, db_module):
+        """Bot commands (планка, стата, etc.) do NOT advance the story."""
+        for cmd in ["планка", "стата", "гайд", "ебать гусей", "кто сегодня вопрос", "объясни"]:
+            msg = make_msg(cmd)
+            msg["conversation_message_id"] = 10
+            with patch.object(bot_module, "get_user_name", return_value="Иван"), \
+                 patch.object(db_module, "ensure_user"), \
+                 patch.object(db_module, "story_is_active") as mock_active, \
+                 patch.object(bot_module, "handle_continue_story") as mock_fn, \
+                 patch.object(bot_module, "handle_planka"), \
+                 patch.object(bot_module, "handle_stats"), \
+                 patch.object(bot_module, "handle_guide"), \
+                 patch.object(bot_module, "handle_geese"), \
+                 patch.object(bot_module, "handle_who_is_today"), \
+                 patch.object(bot_module, "handle_explain"):
+                bot_module.process_message(msg)
+            mock_fn.assert_not_called(), f"handle_continue_story was called for command: {cmd}"
+            mock_active.assert_not_called(), f"story_is_active was checked for command: {cmd}"
+
+    def test_nachat_istoriyu_not_saved_to_chat_messages(self, bot_module, db_module):
+        """'начать историю' excluded from chat_messages."""
+        msg = make_msg("начать историю про котов")
+        msg["conversation_message_id"] = 10
+        with patch.object(bot_module, "get_user_name", return_value="Иван"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "handle_start_story"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+    def test_konchit_istoriyu_not_saved_to_chat_messages(self, bot_module, db_module):
+        """'кончить историю' excluded from chat_messages."""
+        msg = make_msg("кончить историю")
+        msg["conversation_message_id"] = 10
+        with patch.object(bot_module, "get_user_name", return_value="Иван"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "handle_end_story"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+    def test_story_continuation_failure_does_not_block_routing(self, bot_module, db_module):
+        """If story_is_active raises, the error is caught and other commands still work."""
+        msg = make_msg("стата")
+        with patch.object(bot_module, "get_user_name", return_value="Иван"), \
+             patch.object(db_module, "ensure_user"), \
+             patch.object(db_module, "story_is_active", side_effect=RuntimeError("db error")), \
+             patch.object(bot_module, "handle_stats") as mock_stats:
+            bot_module.process_message(msg)
+        mock_stats.assert_called_once()
+
+    def test_handle_guide_includes_story_commands(self, bot_module):
+        """handle_guide mentions начать историю and кончить историю."""
+        msg = make_msg("гайд")
+        with patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_guide(msg)
+        text = mock_send.call_args[0][1]
+        assert "начать историю" in text
+        assert "кончить историю" in text
