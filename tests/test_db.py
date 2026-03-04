@@ -1141,3 +1141,326 @@ class TestGetMessagesForToday:
         assert len(result) == 1
         assert result[0][0] == "Иван Иванов"
         assert result[0][1] == ["Только я тут"]
+
+
+# ---------------------------------------------------------------------------
+# story_is_active
+# ---------------------------------------------------------------------------
+
+class TestStoryIsActive:
+    def _setup_pool(self, db_module, count):
+        pool = MagicMock()
+        rs = MagicMock()
+        rs.rows = [make_count_row(count)]
+        pool.execute_with_retries.return_value = [rs]
+        db_module._pool = pool
+        return pool
+
+    def test_returns_true_when_rows_exist(self, db_module):
+        self._setup_pool(db_module, 2)
+        assert db_module.story_is_active(2000000001) is True
+
+    def test_returns_false_when_no_rows(self, db_module):
+        self._setup_pool(db_module, 0)
+        assert db_module.story_is_active(2000000001) is False
+
+    def test_passes_peer_id_param(self, db_module):
+        pool = self._setup_pool(db_module, 0)
+        db_module.story_is_active(2000000099)
+        params = pool.execute_with_retries.call_args[0][1]
+        assert params["$peer_id"] == 2000000099
+
+
+# ---------------------------------------------------------------------------
+# story_get_turns
+# ---------------------------------------------------------------------------
+
+def _make_turn_row(role, content):
+    row = MagicMock()
+    row.role = role
+    row.content = content
+    return row
+
+
+class TestStoryGetTurns:
+    def _setup_pool(self, db_module, rows):
+        pool = MagicMock()
+        rs = MagicMock()
+        rs.rows = rows
+        pool.execute_with_retries.return_value = [rs]
+        db_module._pool = pool
+        return pool
+
+    def test_returns_empty_list_when_no_turns(self, db_module):
+        self._setup_pool(db_module, [])
+        result = db_module.story_get_turns(2000000001)
+        assert result == []
+
+    def test_returns_turns_as_dicts(self, db_module):
+        self._setup_pool(db_module, [
+            _make_turn_row("user", "про котов"),
+            _make_turn_row("assistant", "Жил-был кот"),
+        ])
+        result = db_module.story_get_turns(2000000001)
+        assert result == [
+            {"role": "user", "content": "про котов"},
+            {"role": "assistant", "content": "Жил-был кот"},
+        ]
+
+    def test_passes_peer_id_param(self, db_module):
+        pool = self._setup_pool(db_module, [])
+        db_module.story_get_turns(2000000042)
+        params = pool.execute_with_retries.call_args[0][1]
+        assert params["$peer_id"] == 2000000042
+
+    def test_preserves_role_and_content(self, db_module):
+        self._setup_pool(db_module, [
+            _make_turn_row("user", "люблю какать"),
+        ])
+        result = db_module.story_get_turns(1)
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "люблю какать"
+
+
+# ---------------------------------------------------------------------------
+# story_append_turns
+# ---------------------------------------------------------------------------
+
+class TestStoryAppendTurns:
+    def _make_pool(self, db_module, max_idx_value):
+        """
+        Build a mock pool for story_append_turns.
+        max_idx_value: what MAX(turn_index) returns (None means no rows yet).
+        """
+        mock_pool = MagicMock()
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+
+            call_index = [0]
+
+            @contextmanager
+            def _execute(query, params=None, commit_tx=False):
+                idx = call_index[0]
+                call_index[0] += 1
+                if idx == 0:
+                    # MAX(turn_index) query
+                    row = MagicMock()
+                    row.max_idx = max_idx_value
+                    rs = MagicMock()
+                    rs.rows = [row] if max_idx_value is not None else []
+                    yield iter([rs])
+                else:
+                    yield iter([])
+
+            mock_tx.execute = _execute
+            return callee(mock_session)
+
+        mock_pool.retry_operation_sync.side_effect = _retry
+        return mock_pool
+
+    def test_no_op_on_empty_turns(self, db_module):
+        """story_append_turns with empty list → pool not called at all."""
+        pool = MagicMock()
+        db_module._pool = pool
+        db_module.story_append_turns(2000000001, [])
+        pool.retry_operation_sync.assert_not_called()
+
+    def test_inserts_first_turn_with_index_zero(self, db_module):
+        """When no existing turns (max_idx=None), first turn gets index 0."""
+        captured_params = []
+
+        mock_pool = MagicMock()
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+
+            call_index = [0]
+
+            @contextmanager
+            def _execute(query, params=None, commit_tx=False):
+                idx = call_index[0]
+                call_index[0] += 1
+                captured_params.append(params or {})
+                if idx == 0:
+                    row = MagicMock()
+                    row.max_idx = None
+                    rs = MagicMock()
+                    rs.rows = []
+                    yield iter([rs])
+                else:
+                    yield iter([])
+
+            mock_tx.execute = _execute
+            return callee(mock_session)
+
+        mock_pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = mock_pool
+
+        db_module.story_append_turns(2000000001, [{"role": "user", "content": "про котов"}])
+
+        # 2nd execute call (idx=1) is the UPSERT with turn_index=0
+        upsert_params = captured_params[1]
+        assert upsert_params["$turn_index"][0] == 0
+
+    def test_increments_turn_index_correctly(self, db_module):
+        """When max_idx=1, next turn gets index 2."""
+        captured_params = []
+
+        mock_pool = MagicMock()
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+
+            call_index = [0]
+
+            @contextmanager
+            def _execute(query, params=None, commit_tx=False):
+                idx = call_index[0]
+                call_index[0] += 1
+                captured_params.append(params or {})
+                if idx == 0:
+                    row = MagicMock()
+                    row.max_idx = 1
+                    rs = MagicMock()
+                    rs.rows = [row]
+                    yield iter([rs])
+                else:
+                    yield iter([])
+
+            mock_tx.execute = _execute
+            return callee(mock_session)
+
+        mock_pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = mock_pool
+
+        db_module.story_append_turns(2000000001, [{"role": "assistant", "content": "Жил-был кот"}])
+
+        upsert_params = captured_params[1]
+        assert upsert_params["$turn_index"][0] == 2
+
+    def test_multiple_turns_get_consecutive_indices(self, db_module):
+        """Appending 2 turns assigns consecutive indices."""
+        captured_params = []
+
+        mock_pool = MagicMock()
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+
+            call_index = [0]
+
+            @contextmanager
+            def _execute(query, params=None, commit_tx=False):
+                idx = call_index[0]
+                call_index[0] += 1
+                captured_params.append(params or {})
+                if idx == 0:
+                    row = MagicMock()
+                    row.max_idx = 3
+                    rs = MagicMock()
+                    rs.rows = [row]
+                    yield iter([rs])
+                else:
+                    yield iter([])
+
+            mock_tx.execute = _execute
+            return callee(mock_session)
+
+        mock_pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = mock_pool
+
+        db_module.story_append_turns(2000000001, [
+            {"role": "user", "content": "люблю какать"},
+            {"role": "assistant", "content": "И кот задумался"},
+        ])
+
+        # captured_params[1] and [2] are the two UPSERT calls
+        assert captured_params[1]["$turn_index"][0] == 4
+        assert captured_params[2]["$turn_index"][0] == 5
+
+    def test_last_upsert_has_commit_tx_true(self, db_module):
+        """Last UPSERT in batch must have commit_tx=True."""
+        commit_tx_values = []
+
+        mock_pool = MagicMock()
+
+        def _retry(callee):
+            mock_session = MagicMock()
+            mock_tx = MagicMock()
+            mock_session.transaction.return_value = mock_tx
+
+            call_index = [0]
+
+            @contextmanager
+            def _execute(query, params=None, commit_tx=False):
+                idx = call_index[0]
+                call_index[0] += 1
+                commit_tx_values.append(commit_tx)
+                if idx == 0:
+                    row = MagicMock()
+                    row.max_idx = None
+                    rs = MagicMock()
+                    rs.rows = []
+                    yield iter([rs])
+                else:
+                    yield iter([])
+
+            mock_tx.execute = _execute
+            return callee(mock_session)
+
+        mock_pool.retry_operation_sync.side_effect = _retry
+        db_module._pool = mock_pool
+
+        db_module.story_append_turns(2000000001, [
+            {"role": "user", "content": "а"},
+            {"role": "assistant", "content": "б"},
+        ])
+
+        # [MAX query, upsert1, upsert2] → commit_tx for last upsert should be True
+        assert commit_tx_values[-1] is True
+        assert commit_tx_values[-2] is False  # second-to-last upsert is False
+
+
+# ---------------------------------------------------------------------------
+# story_clear
+# ---------------------------------------------------------------------------
+
+class TestStoryClear:
+    def test_calls_execute_with_retries_once(self, db_module):
+        pool = MagicMock()
+        pool.execute_with_retries.return_value = [MagicMock()]
+        db_module._pool = pool
+
+        db_module.story_clear(2000000001)
+
+        pool.execute_with_retries.assert_called_once()
+
+    def test_passes_peer_id_param(self, db_module):
+        pool = MagicMock()
+        pool.execute_with_retries.return_value = [MagicMock()]
+        db_module._pool = pool
+
+        db_module.story_clear(2000000099)
+
+        params = pool.execute_with_retries.call_args[0][1]
+        assert params["$peer_id"] == 2000000099
+
+    def test_uses_delete_query(self, db_module):
+        pool = MagicMock()
+        pool.execute_with_retries.return_value = [MagicMock()]
+        db_module._pool = pool
+
+        db_module.story_clear(2000000001)
+
+        query = pool.execute_with_retries.call_args[0][0]
+        assert "DELETE" in query.upper()
+        assert "story_turns" in query

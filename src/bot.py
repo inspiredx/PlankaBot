@@ -34,6 +34,7 @@ def _load_prompt(filename: str) -> str:
 GEESE_STORY_PROMPT = _load_prompt("geese_story_prompt.txt")
 WHO_IS_TODAY_PROMPT = _load_prompt("who_is_today_prompt.txt")
 EXPLAIN_PROMPT = _load_prompt("explain_prompt.txt")
+STORY_MODE_PROMPT = _load_prompt("story_mode_prompt.txt")
 
 # ---------------------------------------------------------------------------
 # Token economy constants for кто сегодня
@@ -89,6 +90,40 @@ DEFAULT_EXPLAIN_STYLES = [
     "как футбольный комментатор",
     "как военный на брифинге",
     "как философ-экзистенциалист",
+]
+
+# ---------------------------------------------------------------------------
+# Token economy constants for story mode
+# ---------------------------------------------------------------------------
+# Keep turn[0] (the story premise) + as many recent turns as fit in budget.
+# Budget: ~80,000 chars ≈ 27k tokens; leaves room for system prompt + output.
+_STORY_CHAR_BUDGET = 80_000
+_STORY_MAX_OUTPUT_TOKENS = 500
+
+STORY_START_PLACEHOLDER_MESSAGES = [
+    "Открываю книгу судеб… история начинается.",
+    "Хорошо. Однажды…",
+    "Беру перо. Сейчас будет история.",
+    "Отлично. Начинаем повествование…",
+    "Разворачиваю свиток. Слушайте.",
+]
+
+STORY_CONTINUE_PLACEHOLDER_MESSAGES = [
+    "Продолжаю…",
+    "Следующая глава уже пишется…",
+    "Так-так, интересный поворот. Думаю…",
+    "Хм, принято. Развиваю мысль…",
+    "История живёт. Пишу…",
+    "Интригующе. Продолжаем…",
+    "Записываю. Сейчас будет продолжение.",
+]
+
+STORY_END_PLACEHOLDER_MESSAGES = [
+    "Закрываю книгу. Финал пишется…",
+    "Подводим итоги. Последняя страница…",
+    "Всё хорошее когда-нибудь заканчивается. Пишу финал…",
+    "Завязываю все нити. Момент…",
+    "Финальный аккорд. Сейчас будет развязка…",
 ]
 
 
@@ -191,6 +226,10 @@ def handle_guide(msg):
         "• объясни [как] — объяснить приложенное сообщение в нужном стиле.\n"
         "  Ответь на сообщение или перешли его, затем напиши «объясни по-пацански».\n"
         "  Если стиль не указан — выберу сам. Можно переслать несколько сообщений.\n"
+        "• начать историю [тема] — запустить совместную историю в чате.\n"
+        "  Бот начинает, а каждое следующее сообщение участников продолжает её.\n"
+        "  Остальные команды работают как обычно во время истории.\n"
+        "• кончить историю — завершить текущую историю.\n"
     )
     send_message(peer_id, text)
 
@@ -399,6 +438,233 @@ def handle_geese(msg, text_raw: str):
     send_message(peer_id, story + "\n\nВы ебете гусей.")
 
 
+# ---------------------------------------------------------------------------
+# Story mode helpers and handlers
+# ---------------------------------------------------------------------------
+
+def _trim_story_context(turns: list[dict]) -> list[dict]:
+    """
+    Trim story turns to fit within _STORY_CHAR_BUDGET.
+
+    Strategy:
+    - Always keep turns[0] (the initial story premise / начать историю line).
+    - Fill the remaining budget with as many of the MOST RECENT turns as possible.
+    - If there is only one turn, return it as-is.
+
+    Returns a list of turns in chronological order ready to pass to the LLM.
+    """
+    if len(turns) <= 1:
+        return list(turns)
+
+    first_turn = turns[0]
+    rest = turns[1:]
+
+    remaining_budget = _STORY_CHAR_BUDGET - len(first_turn["content"])
+
+    # Walk from newest to oldest, accumulating turns that fit
+    selected_rest: list[dict] = []
+    for turn in reversed(rest):
+        cost = len(turn["content"])
+        if remaining_budget <= 0:
+            break
+        selected_rest.append(turn)
+        remaining_budget -= cost
+
+    selected_rest.reverse()  # restore chronological order
+    return [first_turn] + selected_rest
+
+
+def _call_story_llm(turns: list[dict]) -> str:
+    """
+    Call Yandex AI Studio with full multi-turn chat history for story mode.
+
+    Uses chat.completions.create (multi-turn) instead of responses.create (single-turn)
+    so the LLM sees the full conversation thread.
+    """
+    client = openai.OpenAI(
+        api_key=YANDEX_LLM_API_KEY,
+        base_url="https://ai.api.cloud.yandex.net/v1",
+        project=YANDEX_FOLDER_ID,
+    )
+    messages = [{"role": "system", "content": STORY_MODE_PROMPT}] + turns
+    response = client.chat.completions.create(
+        model=f"gpt://{YANDEX_FOLDER_ID}/{DEFAULT_MODEL}",
+        temperature=DEFAULT_TEMPERATURE,
+        messages=messages,
+        max_tokens=_STORY_MAX_OUTPUT_TOKENS,
+    )
+    return response.choices[0].message.content
+
+
+def handle_start_story(msg, text_raw: str):
+    """
+    Handle "начать историю [тема]" command.
+
+    1. Clear any existing story for this chat (restart).
+    2. Save the user's opening prompt as turn[0] (role=user).
+    3. Call LLM to generate the opening line.
+    4. Save the bot's reply as turn[1] (role=assistant).
+    5. Send the opening line to chat.
+    """
+    peer_id = msg["peer_id"]
+
+    # Extract optional theme (everything after "начать историю")
+    trigger = "начать историю"
+    lower_raw = text_raw.lower()
+    idx = lower_raw.find(trigger)
+    user_prompt = text_raw[idx + len(trigger):].strip() if idx != -1 else ""
+    if not user_prompt:
+        user_prompt = "начать историю"
+
+    logger.info("handle_start_story: peer_id=%s prompt=%r", peer_id, user_prompt)
+
+    # Clear any existing story for this chat
+    try:
+        db.story_clear(peer_id)
+    except Exception as e:
+        logger.warning("Failed to clear existing story: %s", e)
+
+    # Send placeholder immediately
+    send_message(peer_id, random.choice(STORY_START_PLACEHOLDER_MESSAGES))
+
+    # Seed the first user turn
+    first_turn = {"role": "user", "content": user_prompt}
+    try:
+        db.story_append_turns(peer_id, [first_turn])
+    except Exception as e:
+        logger.error("Failed to save story first turn: %s", e)
+        send_message(peer_id, "Не удалось начать историю. Попробуй позже.")
+        return
+
+    # Call LLM with just the first turn
+    try:
+        opening = _call_story_llm([first_turn])
+    except Exception as e:
+        logger.error("LLM call failed for story start: %s", e)
+        send_message(peer_id, "Не удалось начать историю. Попробуй позже.")
+        return
+
+    # Save bot reply
+    bot_turn = {"role": "assistant", "content": opening}
+    try:
+        db.story_append_turns(peer_id, [bot_turn])
+    except Exception as e:
+        logger.warning("Failed to save story bot turn: %s", e)
+
+    send_message(peer_id, opening)
+
+
+def handle_continue_story(msg, text_raw: str):
+    """
+    Advance an active story with a new user message.
+
+    1. Load existing turns from DB.
+    2. Append the new user message (in memory only for building context).
+    3. Trim context to fit token budget.
+    4. Call LLM.
+    5. Persist the new user + bot turns to DB.
+    6. Send bot reply to chat.
+    """
+    peer_id = msg["peer_id"]
+    user_name = None
+    if msg.get("from_id") and hasattr(msg, "__contains__") and "_fetched_user_name" in msg:
+        user_name = msg["_fetched_user_name"]
+
+    logger.info("handle_continue_story: peer_id=%s text=%r", peer_id, text_raw[:80])
+
+    # Load existing turns
+    try:
+        turns = db.story_get_turns(peer_id)
+    except Exception as e:
+        logger.error("Failed to load story turns: %s", e)
+        return
+
+    if not turns:
+        # Story expired or was cleared — nothing to continue
+        return
+
+    new_user_turn = {"role": "user", "content": text_raw}
+    context = _trim_story_context(turns + [new_user_turn])
+
+    # Send placeholder immediately
+    send_message(peer_id, random.choice(STORY_CONTINUE_PLACEHOLDER_MESSAGES))
+
+    # Call LLM
+    try:
+        continuation = _call_story_llm(context)
+    except Exception as e:
+        logger.error("LLM call failed for story continuation: %s", e)
+        send_message(peer_id, "История прервалась. Попробуй ещё раз.")
+        return
+
+    # Persist both turns
+    bot_turn = {"role": "assistant", "content": continuation}
+    try:
+        db.story_append_turns(peer_id, [new_user_turn, bot_turn])
+    except Exception as e:
+        logger.warning("Failed to save story turns: %s", e)
+
+    send_message(peer_id, continuation)
+
+
+def handle_end_story(msg):
+    """
+    Handle "кончить историю" command.
+
+    1. Check if story is active; if not, inform the user.
+    2. Load existing turns and append a wrap-up user turn.
+    3. Call LLM with a signal to conclude the story.
+    4. Clear all turns from DB.
+    5. Send the final paragraph.
+    """
+    peer_id = msg["peer_id"]
+
+    logger.info("handle_end_story: peer_id=%s", peer_id)
+
+    # Check if story is active
+    try:
+        active = db.story_is_active(peer_id)
+    except Exception as e:
+        logger.error("Failed to check story active status: %s", e)
+        send_message(peer_id, "Не удалось проверить статус истории. Попробуй позже.")
+        return
+
+    if not active:
+        send_message(peer_id, "Истории сейчас нет. Начни новую командой «начать историю».")
+        return
+
+    # Load existing turns
+    try:
+        turns = db.story_get_turns(peer_id)
+    except Exception as e:
+        logger.error("Failed to load story turns for ending: %s", e)
+        send_message(peer_id, "Не удалось завершить историю. Попробуй позже.")
+        return
+
+    # Send placeholder immediately
+    send_message(peer_id, random.choice(STORY_END_PLACEHOLDER_MESSAGES))
+
+    # Append wrap-up signal
+    end_turn = {"role": "user", "content": "кончить историю"}
+    context = _trim_story_context(turns + [end_turn])
+
+    # Call LLM
+    try:
+        finale = _call_story_llm(context)
+    except Exception as e:
+        logger.error("LLM call failed for story ending: %s", e)
+        send_message(peer_id, "Не удалось завершить историю. Попробуй позже.")
+        return
+
+    # Clear the story
+    try:
+        db.story_clear(peer_id)
+    except Exception as e:
+        logger.warning("Failed to clear story after ending: %s", e)
+
+    send_message(peer_id, finale)
+
+
 def handle_who_is_today(msg, text_raw: str):
     """
     Handle "кто сегодня [question]" command.
@@ -490,6 +756,8 @@ def process_message(msg):
         or text.startswith("ебать гусей")
         or text.startswith("кто сегодня")
         or text.startswith("объясни")
+        or text.startswith("начать историю")
+        or text.startswith("кончить историю")
     )
     if user_id and message_id and text_raw and not _is_bot_command and _fetched_user_name:
         try:
@@ -515,3 +783,18 @@ def process_message(msg):
 
     elif text.startswith("объясни"):
         handle_explain(msg, text_raw)
+
+    elif text.startswith("начать историю"):
+        handle_start_story(msg, text_raw)
+
+    elif text.startswith("кончить историю"):
+        handle_end_story(msg)
+
+    # Story continuation runs in parallel for any organic (non-command) message
+    # while a story is active. Does not interfere with command routing above.
+    if not _is_bot_command and text_raw:
+        try:
+            if db.story_is_active(peer_id_val):
+                handle_continue_story(msg, text_raw)
+        except Exception as e:
+            logger.warning("Story continuation check/run failed: %s", e)

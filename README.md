@@ -294,6 +294,8 @@ pytest tests/ -v
 | `ебать гусей [context]` | Generate a goose-wisdom story via LLM |
 | `кто сегодня [question]` | Analyze today's chat and pick a winner. E.g. `кто сегодня больше всех похож на Цоя?` |
 | `объясни [как]` | Explain a replied-to or forwarded message in the given style. E.g. `объясни по-пацански`. If no style given, one is chosen at random. |
+| `начать историю [тема]` | Start a collaborative story. Bot writes the opening line; every subsequent non-command message from any participant continues it. All other commands keep working normally in parallel. |
+| `кончить историю` | Finalize and clear the current story for this chat. |
 
 All commands work in VK group chats only.
 
@@ -321,7 +323,7 @@ PlankaBot/
 │   ├── variables.tf        # Input variables
 │   ├── function.tf         # Yandex Cloud Function resource
 │   ├── iam.tf              # Service accounts + IAM role bindings
-│   ├── ydb.tf              # YDB serverless DB + users/plank_records/chat_messages tables
+│   ├── ydb.tf              # YDB serverless DB + users/plank_records/chat_messages/story_turns tables
 │   ├── api_gateway.tf      # Yandex API Gateway resource
 │   ├── outputs.tf          # Output values
 │   └── environments/

@@ -418,6 +418,147 @@ def get_messages_for_today() -> list[tuple[str, list[str]]]:
     return [(name, msgs) for name, msgs in sorted(grouped.items())]
 
 
+# ---------------------------------------------------------------------------
+# Story mode DB operations
+# ---------------------------------------------------------------------------
+
+def story_is_active(peer_id: int) -> bool:
+    """
+    Return True if there are story_turns rows for this peer_id.
+
+    Presence of rows means the story is active; TTL expiry auto-clears them.
+    """
+    pool = _get_pool()
+
+    result_sets = pool.execute_with_retries(
+        """
+        DECLARE $peer_id AS Int64;
+
+        SELECT COUNT(*) AS cnt
+        FROM story_turns
+        WHERE peer_id = $peer_id;
+        """,
+        {"$peer_id": peer_id},
+    )
+    rows = result_sets[0].rows
+    return bool(rows and rows[0].cnt > 0)
+
+
+def story_get_turns(peer_id: int) -> list[dict]:
+    """
+    Return all story turns for peer_id ordered by turn_index ascending.
+
+    Each item is {"role": "user"|"assistant", "content": "..."}.
+    Returns [] if no active story.
+    """
+    pool = _get_pool()
+
+    result_sets = pool.execute_with_retries(
+        """
+        DECLARE $peer_id AS Int64;
+
+        SELECT turn_index, role, content
+        FROM story_turns
+        WHERE peer_id = $peer_id
+        ORDER BY turn_index;
+        """,
+        {"$peer_id": peer_id},
+    )
+    return [
+        {"role": row.role, "content": row.content}
+        for row in result_sets[0].rows
+    ]
+
+
+def story_append_turns(peer_id: int, new_turns: list[dict]) -> None:
+    """
+    Append new turns to story_turns for peer_id.
+
+    turn_index is auto-incremented: reads MAX(turn_index) first, then inserts.
+    new_turns is a list of {"role": ..., "content": ...}.
+    Uses SerializableReadWrite transaction to safely increment turn_index.
+    """
+    if not new_turns:
+        return
+
+    pool = _get_pool()
+    now_us = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+
+    def _callee(session: ydb.QuerySession):
+        tx = session.transaction(ydb.QuerySerializableReadWrite())
+
+        try:
+            # Read current MAX turn_index
+            with tx.execute(
+                """
+                DECLARE $peer_id AS Int64;
+
+                SELECT MAX(turn_index) AS max_idx
+                FROM story_turns
+                WHERE peer_id = $peer_id;
+                """,
+                {"$peer_id": peer_id},
+                commit_tx=False,
+            ) as result_sets:
+                rows = list(result_sets)[0].rows
+                max_idx = rows[0].max_idx if (rows and rows[0].max_idx is not None) else -1
+
+            # Insert each new turn
+            for i, turn in enumerate(new_turns):
+                next_idx = max_idx + 1 + i
+                is_last = (i == len(new_turns) - 1)
+                with tx.execute(
+                    """
+                    DECLARE $peer_id AS Int64;
+                    DECLARE $turn_index AS Int32;
+                    DECLARE $role AS Utf8;
+                    DECLARE $content AS Utf8;
+                    DECLARE $created_at AS Timestamp;
+
+                    UPSERT INTO story_turns (peer_id, turn_index, role, content, created_at)
+                    VALUES ($peer_id, $turn_index, $role, $content, $created_at);
+                    """,
+                    {
+                        "$peer_id": peer_id,
+                        "$turn_index": (next_idx, ydb.PrimitiveType.Int32),
+                        "$role": turn["role"],
+                        "$content": turn["content"],
+                        "$created_at": (now_us, ydb.PrimitiveType.Timestamp),
+                    },
+                    commit_tx=is_last,
+                ) as _:
+                    pass
+
+            if not new_turns:
+                tx.commit()
+
+        except Exception:
+            try:
+                tx.rollback()
+            except Exception:
+                pass
+            raise
+
+    pool.retry_operation_sync(_callee)
+
+
+def story_clear(peer_id: int) -> None:
+    """
+    Delete all story_turns rows for peer_id (called after кончить историю).
+    """
+    pool = _get_pool()
+
+    pool.execute_with_retries(
+        """
+        DECLARE $peer_id AS Int64;
+
+        DELETE FROM story_turns
+        WHERE peer_id = $peer_id;
+        """,
+        {"$peer_id": peer_id},
+    )
+
+
 def get_stats_for_today() -> tuple[list[str], list[str]]:
     """
     Return (done, not_done) lists for today.

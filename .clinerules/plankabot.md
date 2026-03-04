@@ -21,6 +21,8 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - `ебать гусей [context]` — generate a goose-wisdom story via LLM
 - `кто сегодня [question]` — analyze today's chat messages and pick a winner based on the question (e.g. "кто сегодня больше всех похож на Цоя?")
 - `объясни [как]` — explain a replied-to or forwarded message in the requested style (e.g. "объясни по-пацански"); if no style given, one is chosen at random
+- `начать историю [тема]` — start a collaborative story; bot generates the opening line; every subsequent non-command message from any participant continues the story; all other commands keep working in parallel
+- `кончить историю` — finalize and clear the current story for this chat
 
 ## Data Architecture (YDB Serverless, row-oriented)
 ### `users` table
@@ -47,6 +49,15 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - TTL: P1D (1 day — only today's messages are needed)
 - No secondary index: at most ~2,000 rows at any time; full scan is trivially fast
 
+### `story_turns` table
+- `peer_id` Int64 PK part — VK conversation peer_id (group chat ID)
+- `turn_index` Int32 PK part — sequential counter per story, ordered ascending
+- `role` Utf8 not null — `"user"` or `"assistant"`
+- `content` Utf8 not null — message text
+- `created_at` Timestamp not null — TTL column
+- PK: (`peer_id`, `turn_index`) — ordered conversation history per chat
+- TTL: P1D (1 day safety net; stories also cleared explicitly via `кончить историю`)
+
 ## Key Design Decisions — `кто сегодня`
 - **Message tracking**: every incoming group chat message is saved to `chat_messages` via `db.save_message()` in `process_message()`, before command routing. **Bot commands are excluded** (`планка`, `стата`, `гайд`, `ебать гусей`, `кто сегодня`) — only organic free-form chat content is stored. Best-effort: exceptions are logged and never block the bot response.
 - **Token economy**: `_build_who_is_today_input()` divides a fixed char budget (~93,000 chars ≈ 31,000 tokens) equally among N users. Within each user's share, newest messages are kept first (reversed iteration) so fresh context survives trimming when a user has many messages.
@@ -64,6 +75,17 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - **Increment**: if user sends `планка +X` and already has a record for today → UPDATE `actual_seconds = COALESCE(actual_seconds, 0) + X`, return "планка увеличена (+X) 💪"; if no record yet, inserts with value X
 - **Stats**: `стата` queries only today's records (not all-time)
 - **`actual_seconds` stored as Int32**: the numeric value from `планка X`; NULL if no value given; overwritten on re-submission with a value
+
+## Key Design Decisions — Story Mode (`начать историю` / `кончить историю`)
+- **State in YDB**: story turns stored in `story_turns` table (peer_id + turn_index PK). Active = rows exist for peer_id. TTL = P1D safety net; `кончить историю` deletes explicitly.
+- **Parallel execution**: story continuation runs AFTER the normal command routing chain for any organic (non-command) message. Bot commands process normally and do NOT advance the story.
+- **Bot messages stored**: unlike other LLM commands, story bot replies ARE saved to `story_turns` as `role=assistant` turns so they become part of the multi-turn LLM context.
+- **LLM API**: uses `client.chat.completions.create(messages=[...])` (multi-turn) rather than the single-turn `responses.create` used by other commands.
+- **Context trimming**: `_trim_story_context()` always keeps `turns[0]` (story premise) + most-recent turns that fit within `_STORY_CHAR_BUDGET` (80,000 chars). Middle turns are dropped gracefully for long stories.
+- **Story commands excluded from `chat_messages`**: `начать историю` and `кончить историю` are added to `_is_bot_command` — not saved to `chat_messages`, not counted in `кто сегодня`.
+- **Restart**: sending `начать историю` when a story is already active clears the old story and starts fresh.
+- **Expired story**: if TTL expires (1 day), rows are gone → organic messages silently skip continuation; `кончить историю` returns "истории нет".
+- **Prompt**: `src/prompts/story_mode_prompt.txt` — Russian storyteller prompt; instructs bot to continue organically, incorporate user contributions, not end early, and wrap up when given `кончить историю`.
 
 ## Project Structure
 ```
