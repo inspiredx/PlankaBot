@@ -118,6 +118,14 @@ STORY_CONTINUE_PLACEHOLDER_MESSAGES = [
     "Записываю. Сейчас будет продолжение.",
 ]
 
+STORY_END_PLACEHOLDER_MESSAGES = [
+    "Закрываю книгу. Финал пишется…",
+    "Подводим итоги. Последняя страница…",
+    "Всё хорошее когда-нибудь заканчивается. Пишу финал…",
+    "Завязываю все нити. Момент…",
+    "Финальный аккорд. Сейчас будет развязка…",
+]
+
 
 def _get_vk():
     vk_session = vk_api.VkApi(token=VK_GROUP_TOKEN)
@@ -632,6 +640,9 @@ def handle_end_story(msg):
         logger.error("Failed to load story turns for ending: %s", e)
         send_message(peer_id, "Не удалось завершить историю. Попробуй позже.")
         return
+
+    # Send placeholder immediately
+    send_message(peer_id, random.choice(STORY_END_PLACEHOLDER_MESSAGES))
 
     # Append wrap-up signal
     end_turn = {"role": "user", "content": "кончить историю"}

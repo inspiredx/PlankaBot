@@ -1389,7 +1389,7 @@ class TestHandleEndStory:
         text = mock_send.call_args[0][1]
         assert "нет" in text.lower() or "начни" in text.lower()
 
-    def test_sends_finale_when_story_active(self, bot_module, db_module):
+    def test_sends_placeholder_then_finale_when_story_active(self, bot_module, db_module):
         msg = self._make_msg()
         with patch.object(db_module, "story_is_active", return_value=True), \
              patch.object(db_module, "story_get_turns", return_value=self._existing_turns()), \
@@ -1397,7 +1397,11 @@ class TestHandleEndStory:
              patch.object(bot_module, "_call_story_llm", return_value="И жили они долго"), \
              patch.object(bot_module, "send_message") as mock_send:
             bot_module.handle_end_story(msg)
-        mock_send.assert_called_once_with(2000000001, "И жили они долго")
+        assert mock_send.call_count == 2
+        placeholder = mock_send.call_args_list[0][0][1]
+        assert placeholder in bot_module.STORY_END_PLACEHOLDER_MESSAGES
+        finale = mock_send.call_args_list[1][0][1]
+        assert finale == "И жили они долго"
 
     def test_clears_story_after_finale(self, bot_module, db_module):
         msg = self._make_msg()
@@ -1423,7 +1427,8 @@ class TestHandleEndStory:
         end_turn = {"role": "user", "content": "кончить историю"}
         assert end_turn in captured
 
-    def test_llm_failure_sends_error(self, bot_module, db_module):
+    def test_llm_failure_sends_placeholder_then_error(self, bot_module, db_module):
+        """LLM failure → placeholder sent first, then error message."""
         msg = self._make_msg()
         with patch.object(db_module, "story_is_active", return_value=True), \
              patch.object(db_module, "story_get_turns", return_value=self._existing_turns()), \
@@ -1431,9 +1436,11 @@ class TestHandleEndStory:
              patch.object(bot_module, "_call_story_llm", side_effect=RuntimeError("api fail")), \
              patch.object(bot_module, "send_message") as mock_send:
             bot_module.handle_end_story(msg)
-        mock_send.assert_called_once()
-        text = mock_send.call_args[0][1]
-        assert "не удалось" in text.lower() or "попробуй" in text.lower()
+        assert mock_send.call_count == 2
+        placeholder = mock_send.call_args_list[0][0][1]
+        assert placeholder in bot_module.STORY_END_PLACEHOLDER_MESSAGES
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "не удалось" in error_text.lower() or "попробуй" in error_text.lower()
 
     def test_story_not_cleared_on_llm_failure(self, bot_module, db_module):
         """If LLM fails, story_clear should NOT be called (story persists for retry)."""
