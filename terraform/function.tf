@@ -90,7 +90,6 @@ resource "yandex_function" "plankabot" {
     YDB_ENDPOINT          = yandex_ydb_database_serverless.plankabot.ydb_api_endpoint
     YDB_DATABASE          = yandex_ydb_database_serverless.plankabot.database_path
     PLANK_TIMEZONE        = var.plank_timezone
-    API_GATEWAY_URL       = "https://${yandex_api_gateway.plankabot.domain}"
   }
 
   log_options {

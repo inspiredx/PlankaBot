@@ -6,7 +6,7 @@ from vk_api.utils import get_random_id
 
 import openai
 
-from config import VK_GROUP_TOKEN, YANDEX_FOLDER_ID, YANDEX_LLM_API_KEY, API_GATEWAY_URL
+from config import VK_GROUP_TOKEN, YANDEX_FOLDER_ID, YANDEX_LLM_API_KEY
 import db
 
 logger = logging.getLogger(__name__)
@@ -230,8 +230,8 @@ def handle_guide(msg):
         "  Бот начинает, а каждое следующее сообщение участников продолжает её.\n"
         "  Остальные команды работают как обычно во время истории.\n"
         "• кончить историю — завершить и удалить текущую историю.\n"
-        f"  Скачать текущую историю: {API_GATEWAY_URL}/current-story.txt\n"
-        "  (история удаляется после завершения — сохрани заранее!)\n"
+        "  Скачать текущую историю: <адрес бота>/current-story.txt\n"
+        "  (спроси у того, кто знает адрес бота; история удаляется после завершения — сохрани заранее!)\n"
     )
     send_message(peer_id, text)
 

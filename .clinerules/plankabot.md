@@ -121,7 +121,6 @@ terraform/
 | `YDB_ENDPOINT` | YDB endpoint (grpcs://...) | required |
 | `YDB_DATABASE` | YDB database path (/ru-central1/...) | required |
 | `PLANK_TIMEZONE` | Timezone for day calculation | `Europe/Moscow` |
-| `API_GATEWAY_URL` | API Gateway base URL (injected by Terraform from `yandex_api_gateway.plankabot.domain`) | required |
 
 ## Testing
 - Tests live in `tests/`, run with `pytest`
