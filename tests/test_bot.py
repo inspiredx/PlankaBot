@@ -26,6 +26,7 @@ def set_env(monkeypatch):
     monkeypatch.delenv("YDB_ENDPOINT", raising=False)
     monkeypatch.delenv("YDB_DATABASE", raising=False)
     monkeypatch.setenv("PLANK_TIMEZONE", "Europe/Moscow")
+    monkeypatch.setenv("API_GATEWAY_URL", "https://test-gw.example.com")
 
 
 @pytest.fixture()
@@ -1549,10 +1550,11 @@ class TestProcessMessageStoryRouting:
         mock_stats.assert_called_once()
 
     def test_handle_guide_includes_story_commands(self, bot_module):
-        """handle_guide mentions начать историю and кончить историю."""
+        """handle_guide mentions начать историю, кончить историю, and the story export URL."""
         msg = make_msg("гайд")
         with patch.object(bot_module, "send_message") as mock_send:
             bot_module.handle_guide(msg)
         text = mock_send.call_args[0][1]
         assert "начать историю" in text
         assert "кончить историю" in text
+        assert "https://test-gw.example.com/current-story.txt" in text

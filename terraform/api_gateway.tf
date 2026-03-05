@@ -36,5 +36,28 @@ paths:
             text/plain:
               schema:
                 type: string
+  /current-story.txt:
+    get:
+      summary: Export current active story as plain text
+      operationId: exportStory
+      parameters:
+        - name: peer_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 2000000001
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: ${yandex_function.plankabot.id}
+        tag: $latest
+        service_account_id: ${yandex_iam_service_account.invoker.id}
+      responses:
+        "200":
+          description: Story text or "no active story" message
+          content:
+            text/plain:
+              schema:
+                type: string
 EOT
 }

@@ -14,3 +14,5 @@ YDB_ENDPOINT = os.getenv("YDB_ENDPOINT", "")
 YDB_DATABASE = os.getenv("YDB_DATABASE", "")
 
 PLANK_TIMEZONE = os.getenv("PLANK_TIMEZONE", "Europe/Moscow")
+
+API_GATEWAY_URL = os.getenv("API_GATEWAY_URL", "")
