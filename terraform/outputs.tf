@@ -3,6 +3,11 @@ output "api_gateway_url" {
   value       = "https://${yandex_api_gateway.plankabot.domain}/"
 }
 
+output "story_export_url" {
+  description = "URL to download the current active story as plain text (add ?peer_id=XXX for non-default chats)"
+  value       = "https://${yandex_api_gateway.plankabot.domain}/current-story.txt"
+}
+
 output "function_id" {
   description = "Yandex Cloud Function ID"
   value       = yandex_function.plankabot.id

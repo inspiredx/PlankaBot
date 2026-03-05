@@ -23,6 +23,7 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - `объясни [как]` — explain a replied-to or forwarded message in the requested style (e.g. "объясни по-пацански"); if no style given, one is chosen at random
 - `начать историю [тема]` — start a collaborative story; bot generates the opening line; every subsequent non-command message from any participant continues the story; all other commands keep working in parallel
 - `кончить историю` — finalize and clear the current story for this chat
+- `GET /current-story.txt` — HTTP export of the active story as plain text (no auth); `peer_id` query param optional, defaults to `2000000001`; returns "Активной истории нет." when no story is active
 
 ## Data Architecture (YDB Serverless, row-oriented)
 ### `users` table

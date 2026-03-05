@@ -1549,10 +1549,11 @@ class TestProcessMessageStoryRouting:
         mock_stats.assert_called_once()
 
     def test_handle_guide_includes_story_commands(self, bot_module):
-        """handle_guide mentions начать историю and кончить историю."""
+        """handle_guide mentions начать историю, кончить историю, and the story export path."""
         msg = make_msg("гайд")
         with patch.object(bot_module, "send_message") as mock_send:
             bot_module.handle_guide(msg)
         text = mock_send.call_args[0][1]
         assert "начать историю" in text
         assert "кончить историю" in text
+        assert "current-story.txt" in text
