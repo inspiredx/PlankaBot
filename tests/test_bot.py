@@ -1729,3 +1729,209 @@ class TestProcessMessageStoryRouting:
         assert "начать историю" in text
         assert "кончить историю" in text
         assert "current-story.txt" in text
+
+
+# ---------------------------------------------------------------------------
+# handle_advice
+# ---------------------------------------------------------------------------
+
+class TestHandleAdvice:
+    def test_routes_sovet_command(self, bot_module):
+        """'совет' is routed to handle_advice."""
+        msg = make_msg("совет")
+        with patch.object(bot_module, "handle_advice") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"):
+            bot_module.process_message(msg)
+        mock_fn.assert_called_once()
+
+    def test_routes_sovet_with_topic(self, bot_module):
+        """'совет как пережить понедельник' is routed to handle_advice."""
+        msg = make_msg("совет как пережить понедельник")
+        with patch.object(bot_module, "handle_advice") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"):
+            bot_module.process_message(msg)
+        mock_fn.assert_called_once()
+
+    def test_sends_placeholder_then_advice(self, bot_module):
+        """Two send_message calls: placeholder first, advice second."""
+        msg = make_msg("совет")
+        mock_response = MagicMock()
+        mock_response.output_text = "Запомни: всегда ешь суп справа налево."
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch("openai.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create.return_value = mock_response
+            bot_module.handle_advice(msg, "совет")
+        assert mock_send.call_count == 2
+        placeholder = mock_send.call_args_list[0][0][1]
+        assert placeholder in bot_module.ADVICE_PLACEHOLDER_MESSAGES
+        advice = mock_send.call_args_list[1][0][1]
+        assert advice == "Запомни: всегда ешь суп справа налево."
+
+    def test_no_topic_passes_default_input(self, bot_module):
+        """No topic after 'совет' → LLM input contains absurd directive."""
+        msg = make_msg("совет")
+        mock_response = MagicMock()
+        mock_response.output_text = "совет"
+        with patch.object(bot_module, "send_message"), \
+             patch("openai.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create.return_value = mock_response
+            bot_module.handle_advice(msg, "совет")
+        call_kwargs = mock_client.responses.create.call_args[1]
+        assert "АБСУРД" in call_kwargs["input"].upper() or "БРЕД" in call_kwargs["input"].upper()
+
+    def test_topic_passed_to_llm(self, bot_module):
+        """Topic after 'совет' is included in LLM input."""
+        msg = make_msg("совет как пережить понедельник")
+        mock_response = MagicMock()
+        mock_response.output_text = "совет"
+        with patch.object(bot_module, "send_message"), \
+             patch("openai.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create.return_value = mock_response
+            bot_module.handle_advice(msg, "совет как пережить понедельник")
+        call_kwargs = mock_client.responses.create.call_args[1]
+        assert "как пережить понедельник" in call_kwargs["input"]
+
+    def test_llm_failure_sends_error_message(self, bot_module):
+        """LLM failure → placeholder + friendly error message."""
+        msg = make_msg("совет")
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch("openai.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create.side_effect = RuntimeError("api error")
+            bot_module.handle_advice(msg, "совет")
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "гуру" in error_text.lower() or "попробуй" in error_text.lower()
+
+    def test_sovet_not_saved_to_chat_messages(self, bot_module, db_module):
+        """'совет' command is excluded from chat_messages tracking."""
+        msg = make_msg("совет про жизнь")
+        msg["conversation_message_id"] = 10
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "handle_advice"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+    def test_advice_placeholder_messages_non_empty(self, bot_module):
+        assert len(bot_module.ADVICE_PLACEHOLDER_MESSAGES) > 0
+        for m in bot_module.ADVICE_PLACEHOLDER_MESSAGES:
+            assert isinstance(m, str) and len(m) > 0
+
+    def test_guide_mentions_sovet(self, bot_module):
+        """handle_guide mentions совет command."""
+        msg = make_msg("гайд")
+        with patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_guide(msg)
+        text = mock_send.call_args[0][1]
+        assert "совет" in text
+
+
+# ---------------------------------------------------------------------------
+# handle_toast
+# ---------------------------------------------------------------------------
+
+class TestHandleToast:
+    def test_routes_tost_command(self, bot_module):
+        """'тост' is routed to handle_toast."""
+        msg = make_msg("тост")
+        with patch.object(bot_module, "handle_toast") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"):
+            bot_module.process_message(msg)
+        mock_fn.assert_called_once()
+
+    def test_routes_tost_with_occasion(self, bot_module):
+        """'тост за пятницу' is routed to handle_toast."""
+        msg = make_msg("тост за пятницу")
+        with patch.object(bot_module, "handle_toast") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"):
+            bot_module.process_message(msg)
+        mock_fn.assert_called_once()
+
+    def test_sends_placeholder_then_toast(self, bot_module):
+        """Two send_message calls: placeholder first, toast second."""
+        msg = make_msg("тост")
+        mock_response = MagicMock()
+        mock_response.output_text = "Друзья! Поднимем бокалы за этот прекрасный момент!"
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch("openai.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create.return_value = mock_response
+            bot_module.handle_toast(msg, "тост")
+        assert mock_send.call_count == 2
+        placeholder = mock_send.call_args_list[0][0][1]
+        assert placeholder in bot_module.TOAST_PLACEHOLDER_MESSAGES
+        toast = mock_send.call_args_list[1][0][1]
+        assert toast == "Друзья! Поднимем бокалы за этот прекрасный момент!"
+
+    def test_no_occasion_passes_default_input(self, bot_module):
+        """No occasion after 'тост' → LLM input contains absurd directive."""
+        msg = make_msg("тост")
+        mock_response = MagicMock()
+        mock_response.output_text = "тост"
+        with patch.object(bot_module, "send_message"), \
+             patch("openai.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create.return_value = mock_response
+            bot_module.handle_toast(msg, "тост")
+        call_kwargs = mock_client.responses.create.call_args[1]
+        assert "АБСУРД" in call_kwargs["input"].upper() or "Валерий" in call_kwargs["input"]
+
+    def test_occasion_passed_to_llm(self, bot_module):
+        """Occasion after 'тост' is included in LLM input."""
+        msg = make_msg("тост за пятницу")
+        mock_response = MagicMock()
+        mock_response.output_text = "тост"
+        with patch.object(bot_module, "send_message"), \
+             patch("openai.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create.return_value = mock_response
+            bot_module.handle_toast(msg, "тост за пятницу")
+        call_kwargs = mock_client.responses.create.call_args[1]
+        assert "за пятницу" in call_kwargs["input"]
+
+    def test_llm_failure_sends_error_message(self, bot_module):
+        """LLM failure → placeholder + friendly error message."""
+        msg = make_msg("тост")
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch("openai.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create.side_effect = RuntimeError("api error")
+            bot_module.handle_toast(msg, "тост")
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "валерий" in error_text.lower() or "попробуй" in error_text.lower()
+
+    def test_tost_not_saved_to_chat_messages(self, bot_module, db_module):
+        """'тост' command is excluded from chat_messages tracking."""
+        msg = make_msg("тост за понедельник")
+        msg["conversation_message_id"] = 10
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "handle_toast"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+    def test_toast_placeholder_messages_non_empty(self, bot_module):
+        assert len(bot_module.TOAST_PLACEHOLDER_MESSAGES) > 0
+        for m in bot_module.TOAST_PLACEHOLDER_MESSAGES:
+            assert isinstance(m, str) and len(m) > 0
+
+    def test_guide_mentions_tost(self, bot_module):
+        """handle_guide mentions тост command."""
+        msg = make_msg("гайд")
+        with patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_guide(msg)
+        text = mock_send.call_args[0][1]
+        assert "тост" in text
