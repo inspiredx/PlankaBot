@@ -94,6 +94,14 @@ DEFAULT_EXPLAIN_STYLES = [
 ]
 
 # ---------------------------------------------------------------------------
+# Token economy constants for сплетня
+# ---------------------------------------------------------------------------
+# Same model context as who_is_today: 32,768 tokens, ~3 chars/token → 93,000 chars.
+# Reserve for system prompt + output overhead; rest split equally among users.
+_GOSSIP_CHAR_BUDGET = 31_000 * 3  # ~93,000 chars total
+_GOSSIP_MAX_MSGS_PER_USER = 20
+
+# ---------------------------------------------------------------------------
 # Token economy constants for story mode
 # ---------------------------------------------------------------------------
 # Keep turn[0] (the story premise) + as many recent turns as fit in budget.
@@ -679,15 +687,38 @@ def handle_end_story(msg):
 
 
 def _build_gossip_input(user_messages: list[tuple[str, list[str]]]) -> str:
-    """Build LLM input for the gossip (сплетня) command."""
+    """
+    Build LLM input for the gossip (сплетня) command.
+
+    Token economy strategy (mirrors _build_who_is_today_input):
+    - Each user is capped at _GOSSIP_MAX_MSGS_PER_USER most-recent messages.
+    - Total char budget is divided equally among N users.
+    - Within each user's share, newest messages are kept first (secondary trim
+      handles unusually long individual messages).
+    """
     if not user_messages:
         return "Переписки за сегодня нет."
 
+    n_users = len(user_messages)
+    per_user_budget = _GOSSIP_CHAR_BUDGET // n_users
+
     sections = []
     for name, msgs in user_messages:
-        # Take last 20 messages per user to keep it manageable
-        recent = msgs[-20:]
-        user_block = "\n".join(f"  — {m}" for m in recent)
+        # Primary cap: most-recent N messages
+        capped = msgs[-_GOSSIP_MAX_MSGS_PER_USER:]
+
+        # Secondary trim: char budget (handles very long individual messages)
+        selected: list[str] = []
+        remaining = per_user_budget
+        for msg in reversed(capped):
+            if remaining <= 0:
+                break
+            chunk = msg[:remaining]
+            selected.append(chunk)
+            remaining -= len(chunk)
+        selected.reverse()  # restore chronological order
+
+        user_block = "\n".join(f"  — {m}" for m in selected)
         sections.append(f"{name}:\n{user_block}")
 
     messages_block = "\n\n".join(sections)
