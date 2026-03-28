@@ -296,6 +296,7 @@ pytest tests/ -v
 | `объясни [как]` | Explain a replied-to or forwarded message in the given style. E.g. `объясни по-пацански`. If no style given, one is chosen at random. |
 | `начать историю [тема]` | Start a collaborative story. Bot writes the opening line; every subsequent non-command message from any participant continues it. All other commands keep working normally in parallel. |
 | `кончить историю` | Finalize and clear the current story for this chat. |
+| `сплетня` | Grandmas on a bench gossip about today's chat — LLM fabricates rumors from real names and messages. |
 
 All commands work in VK group chats only.
 
@@ -313,7 +314,9 @@ PlankaBot/
 │   └── prompts/
 │       ├── geese_story_prompt.txt      # System prompt for the LLM geese story
 │       ├── who_is_today_prompt.txt     # System prompt for кто сегодня
-│       └── explain_prompt.txt          # System prompt for объясни
+│       ├── explain_prompt.txt          # System prompt for объясни
+│       ├── story_mode_prompt.txt       # System prompt for collaborative story mode
+│       └── gossip_prompt.txt           # System prompt for сплетня (бабки на лавке)
 ├── tests/
 │   ├── test_handler.py     # Handler unit tests
 │   ├── test_bot.py         # Bot logic unit tests

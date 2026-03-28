@@ -939,6 +939,178 @@ class TestProcessMessageExplain:
 
 
 # ---------------------------------------------------------------------------
+# handle_gossip
+# ---------------------------------------------------------------------------
+
+class TestHandleGossip:
+    def _make_msg(self, text="сплетня", peer_id=2000000001, from_id=111):
+        return {
+            "text": text,
+            "peer_id": peer_id,
+            "from_id": from_id,
+            "conversation_message_id": 42,
+        }
+
+    def test_gossip_sends_placeholder_then_result(self, bot_module, db_module):
+        """Bot sends placeholder then gossip text when messages exist."""
+        msg = self._make_msg()
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "get_user_name", return_value="Тестер Тестов"), \
+             patch.object(db_module, "ensure_user"), \
+             patch.object(db_module, "save_message"), \
+             patch.object(db_module, "story_is_active", return_value=False), \
+             patch.object(db_module, "get_messages_for_today",
+                          return_value=[("Вася", ["Привет", "Как дела"])]), \
+             patch.object(bot_module, "_call_gossip_llm", return_value="А Вася-то, говорят..."):
+            bot_module.process_message(msg)
+
+        assert mock_send.call_count == 2
+        assert mock_send.call_args_list[0][0][1] in bot_module.GOSSIP_PLACEHOLDER_MESSAGES
+        assert mock_send.call_args_list[1][0][1] == "А Вася-то, говорят..."
+
+    def test_gossip_no_messages_sends_silence_notice(self, bot_module, db_module):
+        """Bot handles empty message list gracefully with a 'quiet' message."""
+        msg = self._make_msg()
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "get_user_name", return_value="Тестер Тестов"), \
+             patch.object(db_module, "ensure_user"), \
+             patch.object(db_module, "save_message"), \
+             patch.object(db_module, "story_is_active", return_value=False), \
+             patch.object(db_module, "get_messages_for_today", return_value=[]):
+            bot_module.process_message(msg)
+
+        assert mock_send.call_count == 2  # placeholder + "quiet" message
+        second_msg = mock_send.call_args_list[1][0][1]
+        assert "тихо" in second_msg.lower() or "молчат" in second_msg.lower()
+
+    def test_gossip_llm_error_sends_error_message(self, bot_module, db_module):
+        """Bot handles LLM failure gracefully."""
+        msg = self._make_msg()
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "get_user_name", return_value="Тестер Тестов"), \
+             patch.object(db_module, "ensure_user"), \
+             patch.object(db_module, "save_message"), \
+             patch.object(db_module, "story_is_active", return_value=False), \
+             patch.object(db_module, "get_messages_for_today",
+                          return_value=[("Вася", ["Привет"])]), \
+             patch.object(bot_module, "_call_gossip_llm", side_effect=RuntimeError("LLM down")):
+            bot_module.process_message(msg)
+
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "охрипли" in error_text or "не так" in error_text
+
+    def test_gossip_not_saved_to_chat_messages(self, bot_module, db_module):
+        """сплетня command is excluded from chat_messages storage."""
+        msg = self._make_msg()
+        with patch.object(bot_module, "send_message"), \
+             patch.object(bot_module, "get_user_name", return_value="Тестер Тестов"), \
+             patch.object(db_module, "ensure_user"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(db_module, "story_is_active", return_value=False), \
+             patch.object(db_module, "get_messages_for_today", return_value=[]):
+            bot_module.process_message(msg)
+
+        mock_save.assert_not_called()
+
+    def test_gossip_routes_correctly(self, bot_module):
+        """'сплетня' is routed to handle_gossip."""
+        msg = self._make_msg()
+        with patch.object(bot_module, "handle_gossip") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"):
+            bot_module.process_message(msg)
+        mock_fn.assert_called_once()
+
+    def test_gossip_placeholder_messages_non_empty(self, bot_module):
+        assert len(bot_module.GOSSIP_PLACEHOLDER_MESSAGES) > 0
+        for m in bot_module.GOSSIP_PLACEHOLDER_MESSAGES:
+            assert isinstance(m, str) and len(m) > 0
+
+    def test_gossip_db_failure_sends_error(self, bot_module, db_module):
+        """If get_messages_for_today raises, user gets an error message."""
+        msg = self._make_msg()
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch.object(bot_module, "get_user_name", return_value="Тестер"), \
+             patch.object(db_module, "ensure_user"), \
+             patch.object(db_module, "save_message"), \
+             patch.object(db_module, "story_is_active", return_value=False), \
+             patch.object(db_module, "get_messages_for_today",
+                          side_effect=RuntimeError("db down")):
+            bot_module.process_message(msg)
+
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "расстроены" in error_text or "не удалось" in error_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# _build_gossip_input — token economy
+# ---------------------------------------------------------------------------
+
+class TestBuildGossipInput:
+    def test_empty_messages_returns_no_messages_text(self, bot_module):
+        result = bot_module._build_gossip_input([])
+        assert "нет" in result.lower()
+
+    def test_includes_user_names_and_messages(self, bot_module):
+        user_msgs = [("Вася", ["Привет", "Как дела"])]
+        result = bot_module._build_gossip_input(user_msgs)
+        assert "Вася" in result
+        assert "Привет" in result
+        assert "Как дела" in result
+
+    def test_directive_prefix_present(self, bot_module):
+        user_msgs = [("Вася", ["привет"])]
+        result = bot_module._build_gossip_input(user_msgs)
+        assert "сплетни" in result.lower() or "сочини" in result.lower()
+
+    def test_per_user_budget_limits_total_chars(self, bot_module):
+        """Output stays within the character budget."""
+        long_msgs = ["А" * 10_000] * 50  # 500,000 chars total
+        user_msgs = [("Болтун", long_msgs)]
+        result = bot_module._build_gossip_input(user_msgs)
+        assert len(result) < 110_000
+
+    def test_fair_split_across_users(self, bot_module):
+        """Each user gets roughly equal share of the budget."""
+        msgs_a = ["А" * 1000] * 200
+        msgs_b = ["Б" * 1000] * 200
+        user_msgs = [("Пользователь А", msgs_a), ("Пользователь Б", msgs_b)]
+        result = bot_module._build_gossip_input(user_msgs)
+        count_a = result.count("А")
+        count_b = result.count("Б")
+        assert abs(count_a - count_b) < max(count_a, count_b) * 0.15
+
+    def test_message_cap_limits_high_volume_user(self, bot_module):
+        """A user with many more messages than the cap is truncated to the cap."""
+        max_cap = bot_module._GOSSIP_MAX_MSGS_PER_USER
+        many_msgs = [f"уникальное_{i:04d}" for i in range(max_cap * 4)]
+        user_msgs = [("Болтун", many_msgs)]
+        result = bot_module._build_gossip_input(user_msgs)
+        included = [m for m in many_msgs if m in result]
+        assert len(included) <= max_cap
+
+    def test_message_cap_keeps_most_recent_messages(self, bot_module):
+        """When capped, the MOST RECENT messages are kept."""
+        max_cap = bot_module._GOSSIP_MAX_MSGS_PER_USER
+        old_msgs = [f"старое_{i}" for i in range(50)]
+        new_msgs = [f"новое_{i}" for i in range(max_cap)]
+        all_msgs = old_msgs + new_msgs
+        user_msgs = [("Пользователь", all_msgs)]
+        result = bot_module._build_gossip_input(user_msgs)
+        for m in new_msgs:
+            assert m in result, f"Expected recent message '{m}' to be present"
+        for m in old_msgs:
+            assert m not in result, f"Expected old message '{m}' to be absent"
+
+    def test_char_budget_constant_exists_and_positive(self, bot_module):
+        assert bot_module._GOSSIP_CHAR_BUDGET > 0
+
+    def test_max_msgs_per_user_constant_exists_and_positive(self, bot_module):
+        assert bot_module._GOSSIP_MAX_MSGS_PER_USER > 0
+
+
+# ---------------------------------------------------------------------------
 # _build_who_is_today_input — token economy
 # ---------------------------------------------------------------------------
 
