@@ -35,6 +35,7 @@ GEESE_STORY_PROMPT = _load_prompt("geese_story_prompt.txt")
 WHO_IS_TODAY_PROMPT = _load_prompt("who_is_today_prompt.txt")
 EXPLAIN_PROMPT = _load_prompt("explain_prompt.txt")
 STORY_MODE_PROMPT = _load_prompt("story_mode_prompt.txt")
+GOSSIP_PROMPT = _load_prompt("gossip_prompt.txt")
 
 # ---------------------------------------------------------------------------
 # Token economy constants for кто сегодня
@@ -116,6 +117,15 @@ STORY_CONTINUE_PLACEHOLDER_MESSAGES = [
     "История живёт. Пишу…",
     "Интригующе. Продолжаем…",
     "Записываю. Сейчас будет продолжение.",
+]
+
+GOSSIP_PLACEHOLDER_MESSAGES = [
+    "Бабки на лавке зашептались…",
+    "Ой, только никому! Уже собираем слухи…",
+    "Слышала? Нет? Сейчас расскажу…",
+    "Тихо-тихо, соседка не слышит. Минуту…",
+    "Это всё неспроста. Разбираемся…",
+    "Та-а-ак, что тут у нас. Сейчас сплетём…",
 ]
 
 STORY_END_PLACEHOLDER_MESSAGES = [
@@ -232,6 +242,7 @@ def handle_guide(msg):
         "• кончить историю — завершить и удалить текущую историю.\n"
         "  Скачать текущую историю: <адрес бота>/current-story.txt\n"
         "  (спроси у того, кто знает адрес бота; история удаляется после завершения — сохрани заранее!)\n"
+        "• сплетня — бабки на лавке разберут переписку за сегодня и сочинят свежие слухи.\n"
     )
     send_message(peer_id, text)
 
@@ -667,6 +678,79 @@ def handle_end_story(msg):
     send_message(peer_id, finale)
 
 
+def _build_gossip_input(user_messages: list[tuple[str, list[str]]]) -> str:
+    """Build LLM input for the gossip (сплетня) command."""
+    if not user_messages:
+        return "Переписки за сегодня нет."
+
+    sections = []
+    for name, msgs in user_messages:
+        # Take last 20 messages per user to keep it manageable
+        recent = msgs[-20:]
+        user_block = "\n".join(f"  — {m}" for m in recent)
+        sections.append(f"{name}:\n{user_block}")
+
+    messages_block = "\n\n".join(sections)
+    return f"Переписка из чата за сегодня:\n\n{messages_block}"
+
+
+def _call_gossip_llm(user_messages: list[tuple[str, list[str]]]) -> str:
+    """Call LLM to generate gossip based on today's chat messages."""
+    client = openai.OpenAI(
+        api_key=YANDEX_LLM_API_KEY,
+        base_url="https://ai.api.cloud.yandex.net/v1",
+        project=YANDEX_FOLDER_ID,
+    )
+    llm_input = _build_gossip_input(user_messages)
+    response = client.responses.create(
+        model=f"gpt://{YANDEX_FOLDER_ID}/{DEFAULT_MODEL}",
+        temperature=DEFAULT_TEMPERATURE,
+        instructions=GOSSIP_PROMPT,
+        input=llm_input,
+        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+    )
+    return response.output_text
+
+
+def handle_gossip(msg):
+    """
+    Handle "сплетня" command.
+
+    1. Send placeholder immediately.
+    2. Load today's messages from DB.
+    3. Call LLM with gossip prompt.
+    4. Send result.
+    """
+    peer_id = msg["peer_id"]
+
+    logger.info("handle_gossip: peer_id=%s", peer_id)
+
+    # Send placeholder immediately
+    send_message(peer_id, random.choice(GOSSIP_PLACEHOLDER_MESSAGES))
+
+    # Load today's messages
+    try:
+        user_messages = db.get_messages_for_today()
+    except Exception as e:
+        logger.error("Failed to load messages for gossip: %s", e)
+        send_message(peer_id, "Не удалось достать переписку. Бабки расстроены.")
+        return
+
+    if not user_messages:
+        send_message(peer_id, "Бабки молчат — сегодня тихо, никто ничего не писал.")
+        return
+
+    # Call LLM
+    try:
+        gossip = _call_gossip_llm(user_messages)
+    except Exception as e:
+        logger.error("LLM call failed for gossip: %s", e)
+        send_message(peer_id, "Бабки охрипли. Что-то пошло не так.")
+        return
+
+    send_message(peer_id, gossip)
+
+
 def handle_who_is_today(msg, text_raw: str):
     """
     Handle "кто сегодня [question]" command.
@@ -755,6 +839,7 @@ def process_message(msg):
         (parts and parts[0] == "планка")
         or text == "стата"
         or text == "гайд"
+        or text == "сплетня"
         or text.startswith("ебать гусей")
         or text.startswith("кто сегодня")
         or text.startswith("объясни")
@@ -788,6 +873,9 @@ def process_message(msg):
 
     elif text.startswith("начать историю"):
         handle_start_story(msg, text_raw)
+
+    elif text == "сплетня":
+        handle_gossip(msg)
 
     elif text.startswith("кончить историю"):
         handle_end_story(msg)

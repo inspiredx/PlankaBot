@@ -24,6 +24,7 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - `начать историю [тема]` — start a collaborative story; bot generates the opening line; every subsequent non-command message from any participant continues the story; all other commands keep working in parallel
 - `кончить историю` — finalize and clear the current story for this chat
 - `GET /current-story.txt` — HTTP export of the active story as plain text (no auth); `peer_id` query param optional, defaults to `2000000001`; returns "Активной истории нет." when no story is active
+- `сплетня` — bot loads today's `chat_messages`, passes them to LLM with a "бабки на лавке" prompt, and posts fabricated gossip based on real names and message fragments; if no messages exist today, returns a "тихо" notice
 
 ## Data Architecture (YDB Serverless, row-oriented)
 ### `users` table
@@ -77,13 +78,20 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - **Stats**: `стата` queries only today's records (not all-time)
 - **`actual_seconds` stored as Int32**: the numeric value from `планка X`; NULL if no value given; overwritten on re-submission with a value
 
+## Key Design Decisions — Сплетня
+- **Prompt**: `src/prompts/gossip_prompt.txt` — instructs LLM to roleplay as gossiping grandmas on a bench; uses real participant names and message fragments, twists them into absurd rumors; 2-4 paragraphs in a conspiratorial whisper style
+- **Input building**: `_build_gossip_input()` — takes last 20 messages per user, formats as named sections; no token economy complexity needed (total daily messages are always small)
+- **Excluded from `chat_messages`**: `сплетня` is added to `_is_bot_command` — not saved to `chat_messages`, not counted in `кто сегодня`
+- **No new DB tables**: reuses `db.get_messages_for_today()` entirely
+- **Empty chat handling**: if no messages today → sends "Бабки молчат — сегодня тихо, никто ничего не писал."
+
 ## Key Design Decisions — Story Mode (`начать историю` / `кончить историю`)
 - **State in YDB**: story turns stored in `story_turns` table (peer_id + turn_index PK). Active = rows exist for peer_id. TTL = P1D safety net; `кончить историю` deletes explicitly.
 - **Parallel execution**: story continuation runs AFTER the normal command routing chain for any organic (non-command) message. Bot commands process normally and do NOT advance the story.
 - **Bot messages stored**: unlike other LLM commands, story bot replies ARE saved to `story_turns` as `role=assistant` turns so they become part of the multi-turn LLM context.
 - **LLM API**: uses `client.chat.completions.create(messages=[...])` (multi-turn) rather than the single-turn `responses.create` used by other commands.
 - **Context trimming**: `_trim_story_context()` always keeps `turns[0]` (story premise) + most-recent turns that fit within `_STORY_CHAR_BUDGET` (80,000 chars). Middle turns are dropped gracefully for long stories.
-- **Story commands excluded from `chat_messages`**: `начать историю` and `кончить историю` are added to `_is_bot_command` — not saved to `chat_messages`, not counted in `кто сегодня`.
+- **Story commands excluded from `chat_messages`**: `начать историю`, `кончить историю`, and `сплетня` are added to `_is_bot_command` — not saved to `chat_messages`, not counted in `кто сегодня`.
 - **Restart**: sending `начать историю` when a story is already active clears the old story and starts fresh.
 - **Expired story**: if TTL expires (1 day), rows are gone → organic messages silently skip continuation; `кончить историю` returns "истории нет".
 - **Prompt**: `src/prompts/story_mode_prompt.txt` — Russian storyteller prompt; instructs bot to continue organically, incorporate user contributions, not end early, and wrap up when given `кончить историю`.
@@ -96,6 +104,7 @@ src/
   db.py          — YDB driver, session pool, all DB operations
   config.py      — env var config
   prompts/       — LLM system prompts
+    gossip_prompt.txt  — бабки на лавке gossip persona
 tests/
   test_bot.py    — bot routing tests (mocked db)
   test_db.py     — db layer tests (mocked YDB)
