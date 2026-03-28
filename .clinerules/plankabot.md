@@ -25,6 +25,8 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 - `кончить историю` — finalize and clear the current story for this chat
 - `GET /current-story.txt` — HTTP export of the active story as plain text (no auth); `peer_id` query param optional, defaults to `2000000001`; returns "Активной истории нет." when no story is active
 - `сплетня` — bot loads today's `chat_messages`, passes them to LLM with a "бабки на лавке" prompt, and posts fabricated gossip based on real names and message fragments; if no messages exist today, returns a "тихо" notice
+- `совет [тема]` — LLM generates an absurd but confident life advice in a random persona (ancient sage, business coach, grandma, etc.); optional topic extracted from text after "совет"; fallback input is "просто дай совет"; `max_output_tokens=200`
+- `тост [повод]` — LLM generates a pафосный toast from drunk toastmaster Valery; optional occasion extracted after "тост"; fallback input is "просто скажи тост"; `max_output_tokens=250`
 
 ## Data Architecture (YDB Serverless, row-oriented)
 ### `users` table
@@ -81,7 +83,7 @@ All commands are in Russian and work in VK group chats only (peer_id ≥ 2000000
 ## Key Design Decisions — Сплетня
 - **Prompt**: `src/prompts/gossip_prompt.txt` — instructs LLM to roleplay as gossiping grandmas on a bench; uses real participant names and message fragments, twists them into absurd rumors; 2-4 paragraphs in a conspiratorial whisper style
 - **Input building**: `_build_gossip_input()` — takes last 20 messages per user, formats as named sections; no token economy complexity needed (total daily messages are always small)
-- **Excluded from `chat_messages`**: `сплетня` is added to `_is_bot_command` — not saved to `chat_messages`, not counted in `кто сегодня`
+- **Excluded from `chat_messages`**: `сплетня`, `совет`, `тост` are added to `_is_bot_command` — not saved to `chat_messages`, not counted in `кто сегодня`
 - **No new DB tables**: reuses `db.get_messages_for_today()` entirely
 - **Empty chat handling**: if no messages today → sends "Бабки молчат — сегодня тихо, никто ничего не писал."
 
@@ -105,6 +107,8 @@ src/
   config.py      — env var config
   prompts/       — LLM system prompts
     gossip_prompt.txt  — бабки на лавке gossip persona
+    advice_prompt.txt  — Великий Гуру Абсурда persona
+    toast_prompt.txt   — тамада Валерий persona
 tests/
   test_bot.py    — bot routing tests (mocked db)
   test_db.py     — db layer tests (mocked YDB)

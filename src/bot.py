@@ -36,6 +36,8 @@ WHO_IS_TODAY_PROMPT = _load_prompt("who_is_today_prompt.txt")
 EXPLAIN_PROMPT = _load_prompt("explain_prompt.txt")
 STORY_MODE_PROMPT = _load_prompt("story_mode_prompt.txt")
 GOSSIP_PROMPT = _load_prompt("gossip_prompt.txt")
+ADVICE_PROMPT = _load_prompt("advice_prompt.txt")
+TOAST_PROMPT = _load_prompt("toast_prompt.txt")
 
 # ---------------------------------------------------------------------------
 # Token economy constants for кто сегодня
@@ -125,6 +127,23 @@ STORY_CONTINUE_PLACEHOLDER_MESSAGES = [
     "История живёт. Пишу…",
     "Интригующе. Продолжаем…",
     "Записываю. Сейчас будет продолжение.",
+]
+
+ADVICE_PLACEHOLDER_MESSAGES = [
+    "Минуту, консультируюсь с высшими силами…",
+    "Записываю совет. Сейчас будет мудрость.",
+    "Хм. Вопрос серьёзный. Думаю…",
+    "Гуру берёт слово. Молчите.",
+    "Открываю книгу судеб на нужной странице…",
+    "Секунду — связываюсь с Вселенной.",
+]
+
+TOAST_PLACEHOLDER_MESSAGES = [
+    "Встаю, поднимаю бокал…",
+    "Тихо! Сейчас будет тост.",
+    "Дайте сказать. Это важно.",
+    "Минуточку внимания. Валерий берёт слово.",
+    "Все подняли? Сейчас скажу.",
 ]
 
 GOSSIP_PLACEHOLDER_MESSAGES = [
@@ -251,6 +270,8 @@ def handle_guide(msg):
         "  Скачать текущую историю: <адрес бота>/current-story.txt\n"
         "  (спроси у того, кто знает адрес бота; история удаляется после завершения — сохрани заранее!)\n"
         "• сплетня — бабки на лавке разберут переписку за сегодня и сочинят свежие слухи.\n"
+        "• совет [тема] — мудрый совет от Великого Гуру Абсурда. Тема необязательна.\n"
+        "• тост [повод] — пафосный тост от тамады Валерия. Повод необязателен.\n"
     )
     send_message(peer_id, text)
 
@@ -686,6 +707,92 @@ def handle_end_story(msg):
     send_message(peer_id, finale)
 
 
+def handle_advice(msg, text_raw: str):
+    """
+    Handle "совет [про что]" command.
+
+    1. Send placeholder immediately.
+    2. Extract optional topic (everything after "совет").
+    3. Call LLM with advice prompt.
+    4. Send result.
+    """
+    peer_id = msg["peer_id"]
+
+    trigger = "совет"
+    lower_raw = text_raw.lower()
+    idx = lower_raw.find(trigger)
+    if idx != -1:
+        topic = text_raw[idx + len(trigger):].strip()
+    else:
+        topic = ""
+
+    llm_input = topic if topic else "просто дай совет"
+    logger.info("handle_advice: topic=%r", topic)
+
+    send_message(peer_id, random.choice(ADVICE_PLACEHOLDER_MESSAGES))
+
+    client = openai.OpenAI(
+        api_key=YANDEX_LLM_API_KEY,
+        base_url="https://ai.api.cloud.yandex.net/v1",
+        project=YANDEX_FOLDER_ID,
+    )
+    try:
+        response = client.responses.create(
+            model=f"gpt://{YANDEX_FOLDER_ID}/{DEFAULT_MODEL}",
+            temperature=DEFAULT_TEMPERATURE,
+            instructions=ADVICE_PROMPT,
+            input=llm_input,
+            max_output_tokens=200,
+        )
+        send_message(peer_id, response.output_text)
+    except Exception as e:
+        logger.error("LLM call failed for advice: %s", e)
+        send_message(peer_id, "Гуру недоступен. Попробуй позже.")
+
+
+def handle_toast(msg, text_raw: str):
+    """
+    Handle "тост [за что]" command.
+
+    1. Send placeholder immediately.
+    2. Extract optional occasion (everything after "тост").
+    3. Call LLM with toast prompt.
+    4. Send result.
+    """
+    peer_id = msg["peer_id"]
+
+    trigger = "тост"
+    lower_raw = text_raw.lower()
+    idx = lower_raw.find(trigger)
+    if idx != -1:
+        occasion = text_raw[idx + len(trigger):].strip()
+    else:
+        occasion = ""
+
+    llm_input = occasion if occasion else "просто скажи тост"
+    logger.info("handle_toast: occasion=%r", occasion)
+
+    send_message(peer_id, random.choice(TOAST_PLACEHOLDER_MESSAGES))
+
+    client = openai.OpenAI(
+        api_key=YANDEX_LLM_API_KEY,
+        base_url="https://ai.api.cloud.yandex.net/v1",
+        project=YANDEX_FOLDER_ID,
+    )
+    try:
+        response = client.responses.create(
+            model=f"gpt://{YANDEX_FOLDER_ID}/{DEFAULT_MODEL}",
+            temperature=DEFAULT_TEMPERATURE,
+            instructions=TOAST_PROMPT,
+            input=llm_input,
+            max_output_tokens=250,
+        )
+        send_message(peer_id, response.output_text)
+    except Exception as e:
+        logger.error("LLM call failed for toast: %s", e)
+        send_message(peer_id, "Валерий охрип. Попробуй позже.")
+
+
 def _build_gossip_input(user_messages: list[tuple[str, list[str]]]) -> str:
     """
     Build LLM input for the gossip (сплетня) command.
@@ -879,6 +986,8 @@ def process_message(msg):
         or text.startswith("объясни")
         or text.startswith("начать историю")
         or text.startswith("кончить историю")
+        or text.startswith("совет")
+        or text.startswith("тост")
     )
     if user_id and message_id and text_raw and not _is_bot_command and _fetched_user_name:
         try:
@@ -907,6 +1016,12 @@ def process_message(msg):
 
     elif text.startswith("начать историю"):
         handle_start_story(msg, text_raw)
+
+    elif text.startswith("совет"):
+        handle_advice(msg, text_raw)
+
+    elif text.startswith("тост"):
+        handle_toast(msg, text_raw)
 
     elif text == "сплетня":
         handle_gossip(msg)
