@@ -1770,7 +1770,7 @@ class TestHandleAdvice:
         assert advice == "Запомни: всегда ешь суп справа налево."
 
     def test_no_topic_passes_default_input(self, bot_module):
-        """No topic after 'совет' → LLM gets 'просто дай совет'."""
+        """No topic after 'совет' → LLM input contains absurd directive."""
         msg = make_msg("совет")
         mock_response = MagicMock()
         mock_response.output_text = "совет"
@@ -1781,10 +1781,10 @@ class TestHandleAdvice:
             mock_client.responses.create.return_value = mock_response
             bot_module.handle_advice(msg, "совет")
         call_kwargs = mock_client.responses.create.call_args[1]
-        assert call_kwargs["input"] == "просто дай совет"
+        assert "АБСУРД" in call_kwargs["input"].upper() or "БРЕД" in call_kwargs["input"].upper()
 
     def test_topic_passed_to_llm(self, bot_module):
-        """Topic after 'совет' is passed as LLM input."""
+        """Topic after 'совет' is included in LLM input."""
         msg = make_msg("совет как пережить понедельник")
         mock_response = MagicMock()
         mock_response.output_text = "совет"
@@ -1795,7 +1795,7 @@ class TestHandleAdvice:
             mock_client.responses.create.return_value = mock_response
             bot_module.handle_advice(msg, "совет как пережить понедельник")
         call_kwargs = mock_client.responses.create.call_args[1]
-        assert call_kwargs["input"] == "как пережить понедельник"
+        assert "как пережить понедельник" in call_kwargs["input"]
 
     def test_llm_failure_sends_error_message(self, bot_module):
         """LLM failure → placeholder + friendly error message."""
@@ -1873,7 +1873,7 @@ class TestHandleToast:
         assert toast == "Друзья! Поднимем бокалы за этот прекрасный момент!"
 
     def test_no_occasion_passes_default_input(self, bot_module):
-        """No occasion after 'тост' → LLM gets 'просто скажи тост'."""
+        """No occasion after 'тост' → LLM input contains absurd directive."""
         msg = make_msg("тост")
         mock_response = MagicMock()
         mock_response.output_text = "тост"
@@ -1884,10 +1884,10 @@ class TestHandleToast:
             mock_client.responses.create.return_value = mock_response
             bot_module.handle_toast(msg, "тост")
         call_kwargs = mock_client.responses.create.call_args[1]
-        assert call_kwargs["input"] == "просто скажи тост"
+        assert "АБСУРД" in call_kwargs["input"].upper() or "Валерий" in call_kwargs["input"]
 
     def test_occasion_passed_to_llm(self, bot_module):
-        """Occasion after 'тост' is passed as LLM input."""
+        """Occasion after 'тост' is included in LLM input."""
         msg = make_msg("тост за пятницу")
         mock_response = MagicMock()
         mock_response.output_text = "тост"
@@ -1898,7 +1898,7 @@ class TestHandleToast:
             mock_client.responses.create.return_value = mock_response
             bot_module.handle_toast(msg, "тост за пятницу")
         call_kwargs = mock_client.responses.create.call_args[1]
-        assert call_kwargs["input"] == "за пятницу"
+        assert "за пятницу" in call_kwargs["input"]
 
     def test_llm_failure_sends_error_message(self, bot_module):
         """LLM failure → placeholder + friendly error message."""

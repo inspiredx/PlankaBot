@@ -726,7 +726,12 @@ def handle_advice(msg, text_raw: str):
     else:
         topic = ""
 
-    llm_input = topic if topic else "просто дай совет"
+    llm_input = (
+        f"Дай АБСУРДНЫЙ, БРЕДОВЫЙ совет (2-3 предложения чистым текстом, БЕЗ фактов, БЕЗ списков, БЕЗ маркдауна). "
+        f"Тема: {topic}"
+        if topic
+        else "Дай АБСУРДНЫЙ, БРЕДОВЫЙ жизненный совет (2-3 предложения чистым текстом, БЕЗ фактов, БЕЗ списков, БЕЗ маркдауна). Тема на твой выбор."
+    )
     logger.info("handle_advice: topic=%r", topic)
 
     send_message(peer_id, random.choice(ADVICE_PLACEHOLDER_MESSAGES))
@@ -769,7 +774,12 @@ def handle_toast(msg, text_raw: str):
     else:
         occasion = ""
 
-    llm_input = occasion if occasion else "просто скажи тост"
+    llm_input = (
+        f"Произнеси АБСУРДНЫЙ, смешной тост тамады Валерия (3-5 предложений чистым текстом, БЕЗ списков, БЕЗ маркдауна, заканчивай призывом выпить). "
+        f"Повод: {occasion}"
+        if occasion
+        else "Произнеси АБСУРДНЫЙ, смешной тост тамады Валерия (3-5 предложений чистым текстом, БЕЗ списков, БЕЗ маркдауна, заканчивай призывом выпить). Повод на твой выбор."
+    )
     logger.info("handle_toast: occasion=%r", occasion)
 
     send_message(peer_id, random.choice(TOAST_PLACEHOLDER_MESSAGES))
