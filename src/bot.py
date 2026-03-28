@@ -691,7 +691,7 @@ def _build_gossip_input(user_messages: list[tuple[str, list[str]]]) -> str:
         sections.append(f"{name}:\n{user_block}")
 
     messages_block = "\n\n".join(sections)
-    return f"Переписка из чата за сегодня:\n\n{messages_block}"
+    return f"Вот переписка из чата. Сочини сплетни на её основе:\n\n{messages_block}"
 
 
 def _call_gossip_llm(user_messages: list[tuple[str, list[str]]]) -> str:
@@ -702,6 +702,7 @@ def _call_gossip_llm(user_messages: list[tuple[str, list[str]]]) -> str:
         project=YANDEX_FOLDER_ID,
     )
     llm_input = _build_gossip_input(user_messages)
+    logger.info("_call_gossip_llm: llm_input=%r GOSSIP_PROMPT=%r", llm_input, GOSSIP_PROMPT)
     response = client.responses.create(
         model=f"gpt://{YANDEX_FOLDER_ID}/{DEFAULT_MODEL}",
         temperature=DEFAULT_TEMPERATURE,
@@ -709,7 +710,9 @@ def _call_gossip_llm(user_messages: list[tuple[str, list[str]]]) -> str:
         input=llm_input,
         max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
     )
-    return response.output_text
+    result = response.output_text
+    logger.info("_call_gossip_llm: result=%r", result)
+    return result
 
 
 def handle_gossip(msg):
