@@ -1935,3 +1935,103 @@ class TestHandleToast:
             bot_module.handle_guide(msg)
         text = mock_send.call_args[0][1]
         assert "тост" in text
+
+
+# ---------------------------------------------------------------------------
+# handle_horoscope
+# ---------------------------------------------------------------------------
+
+class TestHandleHoroscope:
+    def test_routes_goroskop_command(self, bot_module):
+        """'гороскоп' is routed to handle_horoscope."""
+        msg = make_msg("гороскоп")
+        with patch.object(bot_module, "handle_horoscope") as mock_fn, \
+             patch.object(bot_module, "get_user_name", return_value="Иван"):
+            bot_module.process_message(msg)
+        mock_fn.assert_called_once()
+
+    def test_sends_placeholder_then_horoscope(self, bot_module):
+        """Two send_message calls: placeholder first, horoscope second."""
+        msg = make_msg("гороскоп")
+        mock_response = MagicMock()
+        mock_response.output_text = "Сегодня твой холодильник замышляет недоброе."
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch("openai.OpenAI") as mock_openai, \
+             patch.object(bot_module.db, "get_today_date_str", return_value="2026-04-06"):
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create.return_value = mock_response
+            bot_module.handle_horoscope(msg)
+        assert mock_send.call_count == 2
+        placeholder = mock_send.call_args_list[0][0][1]
+        assert placeholder in bot_module.HOROSCOPE_PLACEHOLDER_MESSAGES
+        horoscope = mock_send.call_args_list[1][0][1]
+        assert horoscope == "Сегодня твой холодильник замышляет недоброе."
+
+    def test_zodiac_sign_deterministic(self, bot_module):
+        """Same user_id + date always produces the same sign."""
+        sign1 = bot_module._get_zodiac_sign(111, "2026-04-06")
+        sign2 = bot_module._get_zodiac_sign(111, "2026-04-06")
+        assert sign1 == sign2
+        assert sign1 in bot_module._ZODIAC_SIGNS
+
+    def test_zodiac_sign_changes_with_date(self, bot_module):
+        """Different dates produce different signs (with high probability)."""
+        signs = {bot_module._get_zodiac_sign(111, f"2026-04-{d:02d}") for d in range(1, 13)}
+        # With 12 different dates, we should get at least 2 different signs
+        assert len(signs) >= 2
+
+    def test_zodiac_sign_not_in_output(self, bot_module):
+        """The zodiac sign appears in the LLM input but the prompt forbids it in output."""
+        msg = make_msg("гороскоп")
+        mock_response = MagicMock()
+        mock_response.output_text = "Сегодня Меркурий зашёл в твою кухню."
+        with patch.object(bot_module, "send_message"), \
+             patch("openai.OpenAI") as mock_openai, \
+             patch.object(bot_module.db, "get_today_date_str", return_value="2026-04-06"):
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create.return_value = mock_response
+            bot_module.handle_horoscope(msg)
+        call_kwargs = mock_client.responses.create.call_args[1]
+        # Sign is in the LLM input
+        assert any(sign in call_kwargs["input"] for sign in bot_module._ZODIAC_SIGNS)
+        # Prompt says not to mention it
+        assert "НЕ упоминай" in call_kwargs["input"]
+
+    def test_llm_failure_sends_error_message(self, bot_module):
+        """LLM failure → placeholder + friendly error message."""
+        msg = make_msg("гороскоп")
+        with patch.object(bot_module, "send_message") as mock_send, \
+             patch("openai.OpenAI") as mock_openai, \
+             patch.object(bot_module.db, "get_today_date_str", return_value="2026-04-06"):
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create.side_effect = RuntimeError("api error")
+            bot_module.handle_horoscope(msg)
+        assert mock_send.call_count == 2
+        error_text = mock_send.call_args_list[1][0][1]
+        assert "звёзды" in error_text.lower() or "попробуй" in error_text.lower()
+
+    def test_goroskop_not_saved_to_chat_messages(self, bot_module, db_module):
+        """'гороскоп' command is excluded from chat_messages tracking."""
+        msg = make_msg("гороскоп")
+        msg["conversation_message_id"] = 10
+        with patch.object(bot_module, "get_user_name", return_value="Иван Иванов"), \
+             patch.object(db_module, "save_message") as mock_save, \
+             patch.object(bot_module, "handle_horoscope"):
+            bot_module.process_message(msg)
+        mock_save.assert_not_called()
+
+    def test_horoscope_placeholder_messages_non_empty(self, bot_module):
+        assert len(bot_module.HOROSCOPE_PLACEHOLDER_MESSAGES) > 0
+        for m in bot_module.HOROSCOPE_PLACEHOLDER_MESSAGES:
+            assert isinstance(m, str) and len(m) > 0
+
+    def test_guide_mentions_goroskop(self, bot_module):
+        """handle_guide mentions гороскоп command."""
+        msg = make_msg("гайд")
+        with patch.object(bot_module, "send_message") as mock_send:
+            bot_module.handle_guide(msg)
+        text = mock_send.call_args[0][1]
+        assert "гороскоп" in text

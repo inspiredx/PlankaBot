@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import random
@@ -38,6 +39,7 @@ STORY_MODE_PROMPT = _load_prompt("story_mode_prompt.txt")
 GOSSIP_PROMPT = _load_prompt("gossip_prompt.txt")
 ADVICE_PROMPT = _load_prompt("advice_prompt.txt")
 TOAST_PROMPT = _load_prompt("toast_prompt.txt")
+HOROSCOPE_PROMPT = _load_prompt("horoscope_prompt.txt")
 
 # ---------------------------------------------------------------------------
 # Token economy constants for кто сегодня
@@ -145,6 +147,27 @@ TOAST_PLACEHOLDER_MESSAGES = [
     "Минуточку внимания. Валерий берёт слово.",
     "Все подняли? Сейчас скажу.",
 ]
+
+HOROSCOPE_PLACEHOLDER_MESSAGES = [
+    "Сверяюсь с планетами…",
+    "Секунду, читаю звёзды…",
+    "Меркурий шепчет. Слушаю…",
+    "Открываю астральную карту…",
+    "Луна говорит. Записываю.",
+    "Космос на связи. Жди.",
+]
+
+_ZODIAC_SIGNS = [
+    "Овен", "Телец", "Близнецы", "Рак", "Лев", "Дева",
+    "Весы", "Скорпион", "Стрелец", "Козерог", "Водолей", "Рыбы",
+]
+
+
+def _get_zodiac_sign(user_id: int, date_str: str) -> str:
+    """Deterministic zodiac sign from user_id + date. Same user, same day = same sign."""
+    h = hashlib.md5(f"{user_id}:{date_str}".encode()).hexdigest()
+    return _ZODIAC_SIGNS[int(h, 16) % 12]
+
 
 GOSSIP_PLACEHOLDER_MESSAGES = [
     "Бабки на лавке зашептались…",
@@ -272,6 +295,7 @@ def handle_guide(msg):
         "• сплетня — бабки на лавке разберут переписку за сегодня и сочинят свежие слухи.\n"
         "• совет [тема] — мудрый совет от Великого Гуру Абсурда. Тема необязательна.\n"
         "• тост [повод] — пафосный тост от тамады Валерия. Повод необязателен.\n"
+        "• гороскоп — абсурдный гороскоп на сегодня.\n"
     )
     send_message(peer_id, text)
 
@@ -803,6 +827,50 @@ def handle_toast(msg, text_raw: str):
         send_message(peer_id, "Валерий охрип. Попробуй позже.")
 
 
+def handle_horoscope(msg):
+    """
+    Handle "гороскоп" command.
+
+    1. Send placeholder immediately.
+    2. Derive a deterministic zodiac sign from user_id + today's date.
+    3. Call LLM with horoscope prompt (sign is in the input, NOT in the output).
+    4. Send result.
+    """
+    peer_id = msg["peer_id"]
+    user_id = msg["from_id"]
+
+    logger.info("handle_horoscope: peer_id=%s user_id=%s", peer_id, user_id)
+
+    send_message(peer_id, random.choice(HOROSCOPE_PLACEHOLDER_MESSAGES))
+
+    today_str = db.get_today_date_str()
+    sign = _get_zodiac_sign(user_id, today_str)
+
+    llm_input = (
+        f"Составь АБСУРДНЫЙ гороскоп на сегодня (2-3 предложения чистым текстом, "
+        f"БЕЗ маркдауна, БЕЗ списков). "
+        f"Внутренний знак (НЕ упоминай его в ответе): {sign}."
+    )
+
+    client = openai.OpenAI(
+        api_key=YANDEX_LLM_API_KEY,
+        base_url="https://ai.api.cloud.yandex.net/v1",
+        project=YANDEX_FOLDER_ID,
+    )
+    try:
+        response = client.responses.create(
+            model=f"gpt://{YANDEX_FOLDER_ID}/{DEFAULT_MODEL}",
+            temperature=DEFAULT_TEMPERATURE,
+            instructions=HOROSCOPE_PROMPT,
+            input=llm_input,
+            max_output_tokens=200,
+        )
+        send_message(peer_id, response.output_text)
+    except Exception as e:
+        logger.error("LLM call failed for horoscope: %s", e)
+        send_message(peer_id, "Звёзды молчат. Попробуй позже.")
+
+
 def _build_gossip_input(user_messages: list[tuple[str, list[str]]]) -> str:
     """
     Build LLM input for the gossip (сплетня) command.
@@ -998,6 +1066,7 @@ def process_message(msg):
         or text.startswith("кончить историю")
         or text.startswith("совет")
         or text.startswith("тост")
+        or text == "гороскоп"
     )
     if user_id and message_id and text_raw and not _is_bot_command and _fetched_user_name:
         try:
@@ -1032,6 +1101,9 @@ def process_message(msg):
 
     elif text.startswith("тост"):
         handle_toast(msg, text_raw)
+
+    elif text == "гороскоп":
+        handle_horoscope(msg)
 
     elif text == "сплетня":
         handle_gossip(msg)

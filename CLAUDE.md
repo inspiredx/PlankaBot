@@ -50,6 +50,7 @@ All commands work in VK group chats only (`peer_id >= 2000000000`):
 - `объясни [стиль]` — explain a replied-to message in a given style
 - `начать историю [тема]` / `кончить историю` — collaborative story mode
 - `сплетня` — LLM gossip based on today's chat
+- `гороскоп` — absurd daily horoscope (deterministic sign from user_id + date, not shown in output)
 - `совет [тема]` — absurd life advice from random persona
 - `тост [повод]` — pompous toast from drunk toastmaster Valery
 
