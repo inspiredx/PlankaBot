@@ -299,6 +299,7 @@ pytest tests/ -v
 | `сплетня` | Grandmas on a bench gossip about today's chat — LLM fabricates rumors from real names and messages. |
 | `совет [тема]` | Absurd but confident life advice from the Great Guru of Absurdity. Topic is optional. |
 | `тост [повод]` | Pompous toast from toastmaster Valery (who's had a few). Occasion is optional. |
+| `гороскоп` | Absurd daily horoscope — different each day, personalized per user. |
 
 All commands work in VK group chats only.
 
@@ -320,7 +321,8 @@ PlankaBot/
 │       ├── story_mode_prompt.txt       # System prompt for collaborative story mode
 │       ├── gossip_prompt.txt           # System prompt for сплетня (бабки на лавке)
 │       ├── advice_prompt.txt           # System prompt for совет (Великий Гуру Абсурда)
-│       └── toast_prompt.txt            # System prompt for тост (тамада Валерий)
+│       ├── toast_prompt.txt            # System prompt for тост (тамада Валерий)
+│       └── horoscope_prompt.txt       # System prompt for гороскоп (астролог-шарлатан)
 ├── tests/
 │   ├── test_handler.py     # Handler unit tests
 │   ├── test_bot.py         # Bot logic unit tests
