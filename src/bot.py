@@ -13,7 +13,7 @@ import db
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_OUTPUT_TOKENS = 300
-DEFAULT_MODEL= 'yandexgpt/rc'
+DEFAULT_MODEL = 'deepseek-v4-flash'
 DEFAULT_TEMPERATURE = 0.9
 
 # ---------------------------------------------------------------------------
@@ -100,7 +100,11 @@ DEFAULT_EXPLAIN_STYLES = [
 # ---------------------------------------------------------------------------
 # Token economy constants for сплетня
 # ---------------------------------------------------------------------------
-# Same model context as who_is_today: 32,768 tokens, ~3 chars/token → 93,000 chars.
+# Conservative char budget for the chat context we send to the LLM.
+# The active model (see DEFAULT_MODEL) has a far larger context window than this
+# cap, so the cap is deliberately independent of the model's real limit for now —
+# it exists to bound cost/latency, not to fit the window. Revisit if the model or
+# cost targets change. ~3 chars/token → ~93,000 chars.
 # Reserve for system prompt + output overhead; rest split equally among users.
 _GOSSIP_CHAR_BUDGET = 31_000 * 3  # ~93,000 chars total
 _GOSSIP_MAX_MSGS_PER_USER = 20
