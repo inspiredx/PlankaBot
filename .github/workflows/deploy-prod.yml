@@ -1,9 +1,17 @@
 name: Deploy to Prod
 
+# PAUSED (2026-07-31) — the prod stack was torn down via the "Destroy YC Stack"
+# workflow. The automatic `push` trigger is commented out so that the next
+# merge to main does not silently recreate the whole environment in Yandex Cloud.
+#
+# To resume automatic prod deploys: uncomment the `push:` block below.
+# Until then the workflow can still be started deliberately from
+# Actions -> Deploy to Prod -> Run workflow.
+
 on:
-  push:
-    branches:
-      - main
+  # push:
+  #   branches:
+  #     - main
   workflow_dispatch:
 
 env:

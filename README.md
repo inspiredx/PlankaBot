@@ -179,9 +179,16 @@ AWS_PROFILE=plankabot-prod terraform apply \
 
 ## GitHub Actions Deployment
 
-A single workflow (`deploy-dev.yml`) handles deployment. It triggers on:
-- Any push to any branch
-- Manual `workflow_dispatch`
+Two workflows handle deployment: `deploy-dev.yml` and `deploy-prod.yml`.
+
+> ⚠️ **Both are paused (2026-07-31).** The dev and prod stacks were torn down (see
+> [Tearing Down an Environment](#tearing-down-an-environment)), so the automatic `push`
+> triggers are **commented out** in both workflow files — otherwise the next commit would
+> silently recreate the whole environment in Yandex Cloud. Both can still be started
+> deliberately from **Actions → Run workflow**.
+>
+> **To resume automatic deploys**, uncomment the `push:` trigger in the workflow file:
+> `deploy-dev.yml` fires on a push to any branch, `deploy-prod.yml` on a push to `main`.
 
 ### Required GitHub Secrets
 
