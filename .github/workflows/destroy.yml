@@ -1,0 +1,140 @@
+name: Destroy YC Stack
+
+# Manual-only teardown of the whole Yandex Cloud stack for one environment
+# (YDB database + tables, Cloud Function, API Gateway, service accounts and
+# IAM bindings, logging group).
+#
+# Who can run it: anyone with repo write access — that is the intended gate.
+# Against accidents: the operator must type `destroy <environment>` exactly,
+# so a stray click cannot trigger a teardown.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment whose stack will be destroyed"
+        type: choice
+        required: true
+        options:
+          - dev
+          - prod
+      confirm:
+        description: "Type `destroy dev` or `destroy prod` to confirm"
+        type: string
+        required: true
+
+concurrency:
+  group: yc-stack-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Verify confirmation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation phrase
+        env:
+          EXPECTED: destroy ${{ inputs.environment }}
+          ACTUAL: ${{ inputs.confirm }}
+        run: |
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Confirmation mismatch. Expected '$EXPECTED', got '$ACTUAL'."
+            exit 1
+          fi
+          echo "Confirmation accepted for environment '${{ inputs.environment }}'."
+
+      # The `<cond> && <prod> || <dev>` selectors below fall back to the dev
+      # secrets when a prod secret is unset — which would silently aim a "prod"
+      # destroy at the dev folder. Fail loudly instead.
+      - name: Check the selected environment's secrets exist
+        env:
+          FOLDER_ID: ${{ inputs.environment == 'prod' && secrets.YC_FOLDER_ID_PROD || secrets.YC_FOLDER_ID_DEV }}
+          SA_KEY: ${{ inputs.environment == 'prod' && secrets.YC_SA_KEY_JSON_PROD || secrets.YC_SA_KEY_JSON_DEV }}
+          S3_KEY: ${{ inputs.environment == 'prod' && secrets.YC_S3_ACCESS_KEY_PROD || secrets.YC_S3_ACCESS_KEY_DEV }}
+          S3_SECRET: ${{ inputs.environment == 'prod' && secrets.YC_S3_SECRET_KEY_PROD || secrets.YC_S3_SECRET_KEY_DEV }}
+          OTHER_FOLDER_ID: ${{ inputs.environment == 'prod' && secrets.YC_FOLDER_ID_DEV || secrets.YC_FOLDER_ID_PROD }}
+        run: |
+          missing=""
+          for name in FOLDER_ID SA_KEY S3_KEY S3_SECRET; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing secrets for '${{ inputs.environment }}':$missing"
+            exit 1
+          fi
+          if [ -n "$OTHER_FOLDER_ID" ] && [ "$FOLDER_ID" = "$OTHER_FOLDER_ID" ]; then
+            echo "::error::Resolved folder ID equals the other environment's folder ID — secret selection fell through. Aborting."
+            exit 1
+          fi
+
+  destroy:
+    name: Terraform destroy (${{ inputs.environment }})
+    needs: guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TF_VAR_environment: ${{ inputs.environment }}
+      TF_VAR_cloud_id: ${{ secrets.YC_CLOUD_ID }}
+      TF_VAR_folder_id: ${{ inputs.environment == 'prod' && secrets.YC_FOLDER_ID_PROD || secrets.YC_FOLDER_ID_DEV }}
+      TF_VAR_tfstate_bucket: plankabot-tfstate-${{ inputs.environment }}
+      TF_VAR_vk_group_token: ${{ inputs.environment == 'prod' && secrets.VK_GROUP_TOKEN_PROD || secrets.VK_GROUP_TOKEN_DEV }}
+      TF_VAR_vk_confirmation_token: ${{ inputs.environment == 'prod' && secrets.VK_CONFIRMATION_TOKEN_PROD || secrets.VK_CONFIRMATION_TOKEN_DEV }}
+      TF_VAR_vk_secret_key: ${{ inputs.environment == 'prod' && secrets.VK_SECRET_KEY_PROD || secrets.VK_SECRET_KEY_DEV }}
+      TF_VAR_yandex_llm_api_key: ${{ inputs.environment == 'prod' && secrets.YANDEX_LLM_API_KEY_PROD || secrets.YANDEX_LLM_API_KEY_DEV }}
+      AWS_ACCESS_KEY_ID: ${{ inputs.environment == 'prod' && secrets.YC_S3_ACCESS_KEY_PROD || secrets.YC_S3_ACCESS_KEY_DEV }}
+      AWS_SECRET_ACCESS_KEY: ${{ inputs.environment == 'prod' && secrets.YC_S3_SECRET_KEY_PROD || secrets.YC_S3_SECRET_KEY_DEV }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write deployer SA key
+        run: |
+          mkdir -p ~/.yc
+          if [ "${{ inputs.environment }}" = "prod" ]; then
+            echo '${{ secrets.YC_SA_KEY_JSON_PROD }}' > ~/.yc/deployer-key.json
+          else
+            echo '${{ secrets.YC_SA_KEY_JSON_DEV }}' > ~/.yc/deployer-key.json
+          fi
+        shell: bash
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          terraform init \
+            -backend-config="bucket=plankabot-tfstate-${{ inputs.environment }}" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="region=ru-central1" \
+            -backend-config="skip_region_validation=true" \
+            -backend-config="skip_credentials_validation=true" \
+            -backend-config="skip_metadata_api_check=true" \
+            -backend-config="skip_requesting_account_id=true" \
+            -backend-config="force_path_style=true" \
+            -reconfigure
+
+      - name: Terraform Destroy Plan
+        working-directory: terraform
+        run: |
+          terraform plan -destroy -no-color \
+            -var="sa_key_file=$HOME/.yc/deployer-key.json" \
+            -out=destroy.tfplan
+
+      - name: Terraform Destroy
+        working-directory: terraform
+        run: terraform apply -auto-approve -no-color destroy.tfplan
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Destroy \`${{ inputs.environment }}\`"
+            echo ""
+            echo "- Triggered by: @${{ github.actor }}"
+            echo "- Result: ${{ job.status }}"
+            echo ""
+            echo "The Terraform state bucket \`plankabot-tfstate-${{ inputs.environment }}\` is *not*"
+            echo "managed by Terraform and was left in place. The manually-created LLM API key"
+            echo "for \`plankabot-llm-${{ inputs.environment }}\` must also be revoked by hand."
+          } >> "$GITHUB_STEP_SUMMARY"
