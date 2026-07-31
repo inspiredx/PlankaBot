@@ -203,6 +203,37 @@ Add these in **Settings → Secrets and variables → Actions**:
 
 ---
 
+## Tearing Down an Environment
+
+The `Destroy YC Stack` workflow (`.github/workflows/destroy.yml`) runs `terraform destroy`
+for a single environment. It removes the YDB database and all its tables (**including all
+data**), the Cloud Function, the API Gateway, the logging group, and the service accounts
+and IAM bindings.
+
+It handles **both `dev` and `prod`** — the environment is a dispatch input that selects the
+folder, the credentials, and the Terraform state bucket.
+
+It is **manual only** (`workflow_dispatch`); running it requires repo write access. Against
+accidents, the operator must type `destroy dev` / `destroy prod` exactly, and a mismatch
+fails the run before any credential is touched. A second guard step aborts if the selected
+environment's secrets are missing, so a `prod` run can never fall back to dev credentials.
+
+### Running it
+
+**Actions → Destroy YC Stack → Run workflow** → pick `dev` or `prod`, type the matching
+confirmation phrase, run. The run prints a destroy plan before applying it.
+
+### Not covered by the workflow
+
+- The Terraform state bucket `plankabot-tfstate-<env>` is the backend, not a managed
+  resource — it survives and must be deleted by hand if you want it gone.
+- The manually-created LLM API key for `plankabot-llm-<env>` must be revoked in the
+  YC Console (the SA itself is destroyed, but revoke the key explicitly).
+- The VK group's Callback API server entry still points at the deleted API Gateway URL —
+  remove or re-point it after a redeploy.
+
+---
+
 ## Post-deploy Checklist: LLM API Key Setup
 
 > ⚠️ **Do this after every first `terraform apply` in a new environment** (or whenever the SA is recreated).
@@ -340,7 +371,9 @@ PlankaBot/
 │       └── prod.tfvars.example  # Prod variables template (copy → prod.tfvars, git-ignored)
 ├── .github/
 │   └── workflows/
-│       └── deploy-dev.yml  # CI/CD — triggers on push to any branch
+│       ├── deploy-dev.yml  # CI/CD — triggers on push to any branch
+│       ├── deploy-prod.yml # CI/CD — triggers on push to main
+│       └── destroy.yml     # Manual terraform destroy (dev or prod)
 ├── requirements.txt        # Runtime dependencies
 ├── requirements-dev.txt    # Test/dev dependencies
 └── README.md

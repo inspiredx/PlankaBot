@@ -22,7 +22,9 @@ tests/
   test_bot.py    — bot routing tests (mocked db)
   test_db.py     — db layer tests (mocked YDB)
 terraform/       — YDB, Cloud Function, IAM, API Gateway
-.github/workflows/deploy-dev.yml — CI/CD pipeline
+.github/workflows/deploy-dev.yml  — CI/CD pipeline (dev)
+.github/workflows/deploy-prod.yml — CI/CD pipeline (prod)
+.github/workflows/destroy.yml     — manual, reviewer-gated `terraform destroy`
 ```
 
 ## Development
@@ -39,6 +41,13 @@ Use the project venv: `./.venv/bin/activate`
 ### Deployment
 - Push to any branch triggers `deploy-dev.yml`
 - No manual steps — Terraform provisions everything (YDB, tables, IAM, function)
+
+### Teardown
+- `destroy.yml` — `workflow_dispatch` only, destroys the whole YC stack for one environment
+- `environment` input (`dev`/`prod`) selects folder, secrets, and tfstate bucket
+- Guarded by a typed `destroy <env>` confirmation plus a secrets-present check
+  (prevents a `prod` run silently falling back to dev credentials)
+- Not destroyed: the tfstate bucket (backend), the manual LLM API key (revoke by hand)
 
 ## Bot Commands (Russian)
 All commands work in VK group chats only (`peer_id >= 2000000000`):
