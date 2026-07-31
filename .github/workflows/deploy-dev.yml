@@ -1,7 +1,15 @@
 name: Deploy to Dev
 
+# PAUSED (2026-07-31) — the dev stack was torn down via the "Destroy YC Stack"
+# workflow. The automatic `push` trigger is commented out so that the next
+# commit does not silently recreate the whole environment in Yandex Cloud.
+#
+# To resume automatic dev deploys: uncomment the `push:` line below.
+# Until then the workflow can still be started deliberately from
+# Actions -> Deploy to Dev -> Run workflow.
+
 on:
-  push:
+  # push:
   workflow_dispatch:
 
 env:

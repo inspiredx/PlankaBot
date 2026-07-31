@@ -39,7 +39,11 @@ Use the project venv: `./.venv/bin/activate`
 - **Always write tests** for new features and changes
 
 ### Deployment
-- Push to any branch triggers `deploy-dev.yml`
+- **PAUSED (2026-07-31)** — dev and prod stacks were destroyed; the `push:` triggers in
+  `deploy-dev.yml` and `deploy-prod.yml` are **commented out** so a commit cannot silently
+  recreate them. Both remain runnable via `workflow_dispatch`.
+- To resume: uncomment `push:` in the relevant workflow file
+  (dev = any branch, prod = `main`)
 - No manual steps — Terraform provisions everything (YDB, tables, IAM, function)
 
 ### Teardown
